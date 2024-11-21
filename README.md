@@ -1,5 +1,19 @@
 # Vulkan Probe
 
+## Build and run
+
+### On linux
+
+```bash
+make run
+```
+
+### On MacOS
+
+```zsh
+make mac
+```
+
 ## Resources
 
 [- Vulkan tutorial website](https://vulkan-tutorial.com/)
@@ -59,4 +73,12 @@ sudo apt install libcglm-dev
 
 ```bash
 sudo apt install libxxf86vm-dev libxi-dev
+```
+
+## Setup Mac:
+
+Follow [the development environmen](https://vulkan-tutorial.com/en/Development_environment) and:
+
+```zsh
+brew install libxxf86vm libxrandr libxi
 ```

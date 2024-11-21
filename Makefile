@@ -5,11 +5,16 @@ LDFLAGS = -lglfw -lvulkan -ldl -lpthread -lX11 -lXxf86vm -lXrandr -lXi
 BUILD_DIR = build/
 
 VulkanProbe: main.c
+	mkdir -p $(BUILD_DIR)
 	clang $(CFLAGS) -o $(BUILD_DIR)VulkanProbe main.c $(LDFLAGS)
 
-.PHONY: test clean
+.PHONY: test clean mac
 
-test: VulkanProbe
+mac: VulkanProbe
+	install_name_tool -add_rpath /usr/local/lib/ ./build/VulkanProbe
+	./$(BUILD_DIR)VulkanProbe
+
+run: VulkanProbe
 	./$(BUILD_DIR)VulkanProbe
 
 clean:
