@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -7,6 +8,16 @@
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
 const char *TITLE = "Vulkan Probe";
+
+const char *validationLayers[] = {
+    "VK_LAYER_KHRONOS_validation",
+};
+
+#ifdef NDEBUG
+const bool enableValidationLayers = false;
+#else
+const bool enableValidationLayers = true;
+#endif
 
 typedef struct App
 {
@@ -30,6 +41,12 @@ AppResult cleanup(App *app, AppResult result);
 
 int main(void)
 {
+#ifdef NDEBUG // pass -DNDEBUG to the compiler when building in release mode
+    printf("Running in release mode\n");
+#else
+    printf("Running in debug mode\n");
+#endif
+
     App app = {0};
 
     AppResult result = {0};
@@ -93,6 +110,8 @@ AppResult initVulkan(App *app)
 #ifdef __APPLE__
     // On macOS, we need to enable the VK_KHR_portability_enumeration extension
     // and set the VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR flag
+    // https://vulkan-tutorial.com/en/Drawing_a_triangle/Setup/Instance cf the ¨Encountered
+    // VK_ERROR_INCOMPATIBLE_DRIVER section"
 
     requiredExtensionCount += 1;
     requiredExtensions = malloc(sizeof(char *) * requiredExtensionCount);
@@ -163,6 +182,12 @@ AppResult initVulkan(App *app)
     for (uint32_t i = 0; i < extensionCount; ++i)
     {
         printf("\t%s\n", extensions[i].extensionName);
+    }
+
+    printf("Required glfw extensions:\n");
+    for (uint32_t i = 0; i < glfwExtensionCount; ++i)
+    {
+        printf("\t%s\n", glfwExtensions[i]);
     }
 
 #ifdef __APPLE__

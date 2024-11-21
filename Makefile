@@ -10,11 +10,11 @@ VulkanProbe: main.c
 
 .PHONY: test clean mac
 
-mac: VulkanProbe
-	install_name_tool -add_rpath /usr/local/lib/ ./build/VulkanProbe
+run: VulkanProbe
 	./$(BUILD_DIR)VulkanProbe
 
-run: VulkanProbe
+mac: VulkanProbe
+	install_name_tool -add_rpath /usr/local/lib/ ./build/VulkanProbe
 	./$(BUILD_DIR)VulkanProbe
 
 clean:
