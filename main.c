@@ -1,4 +1,3 @@
-// std
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -9,26 +8,72 @@ const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
 const char *TITLE = "Vulkan Probe";
 
+typedef struct App
+{
+    GLFWwindow *window;
+    VkInstance instance;
+} App;
+
+typedef enum AppResult
+{
+    APP_SUCCESS = 0,
+    APP_ERROR_MALLOC = 1,
+    APP_ERROR_GLFW_INIT = 2,
+    APP_ERROR_GLFW_WINDOW = 3,
+    APP_ERROR_VULKAN_INSTANCE = 4,
+    APP_ERROR_VULKAN_ENUM_INSTANCE_EXT_PROP = 5,
+} AppResult;
+
+AppResult initGLFW(App *app);
+AppResult initVulkan(App *app);
+AppResult cleanup(App *app, AppResult result);
+
 int main(void)
 {
-    // Initialize GLFW
+    App app = {0};
+
+    AppResult result = {0};
+
+    result = initGLFW(&app);
+    if (result != APP_SUCCESS)
+        return cleanup(&app, result);
+
+    result = initVulkan(&app);
+    if (result != APP_SUCCESS)
+        return cleanup(&app, result);
+
+    // Main loop
+    while (!glfwWindowShouldClose(app.window))
+    {
+        glfwPollEvents();
+    }
+
+    return cleanup(&app, APP_SUCCESS);
+}
+
+AppResult initGLFW(App *app)
+{
     if (!glfwInit())
     {
-        printf("Failed to initialize GLFW\n");
-        return 1;
+        fprintf(stderr, "ERROR: Failed to initialize GLFW\n");
+        return APP_ERROR_GLFW_INIT;
     }
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
-    // Create GLFW window
-    GLFWwindow *window = glfwCreateWindow(WIDTH, HEIGHT, TITLE, NULL, NULL);
-    if (!window)
+    app->window = glfwCreateWindow(WIDTH, HEIGHT, TITLE, NULL, NULL);
+    if (!app->window)
     {
-        printf("Failed to create GLFW window\n");
-        glfwTerminate();
-        return 2;
+        fprintf(stderr, "ERROR: Failed to create GLFW window\n");
+        return APP_ERROR_GLFW_WINDOW;
     }
+
+    return APP_SUCCESS;
+}
+
+AppResult initVulkan(App *app)
+{
 
     VkApplicationInfo appInfo = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -53,10 +98,8 @@ int main(void)
     requiredExtensions = malloc(sizeof(char *) * requiredExtensionCount);
     if (!requiredExtensions)
     {
-        printf("Failed to allocate memory for required extensions\n");
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return 3;
+        fprintf(stderr, "Failed to allocate memory for required extensions\n");
+        return APP_ERROR_MALLOC;
     }
 
     for (uint32_t i = 0; i < glfwExtensionCount; ++i)
@@ -65,12 +108,10 @@ int main(void)
     }
 
     requiredExtensions[glfwExtensionCount] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
-
 #else
     requiredExtensions = glfwExtensions;
 #endif
 
-    // Vulkan instance creation info
     VkInstanceCreateInfo createInfo = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
         .pApplicationInfo = &appInfo,
@@ -86,34 +127,66 @@ int main(void)
 #endif
     };
 
-    // Create Vulkan instance
-    VkInstance instance;
-    VkResult result = vkCreateInstance(&createInfo, NULL, &instance);
-
-    if (result != VK_SUCCESS)
+    VkResult instanceResult = vkCreateInstance(&createInfo, NULL, &app->instance);
+    if (instanceResult != VK_SUCCESS)
     {
-        printf("Failed to create Vulkan instance!\n");
+        fprintf(stderr, "Failed to create Vulkan instance: %d\n", instanceResult);
 #ifdef __APPLE__
         free(requiredExtensions);
 #endif
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return 4;
+        return APP_ERROR_VULKAN_INSTANCE;
     }
 
-    // Main loop
-    while (!glfwWindowShouldClose(window))
+    uint32_t extensionCount = 0;
+    VkResult enumInstanceExtPropResult = vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, NULL);
+    if (enumInstanceExtPropResult != VK_SUCCESS)
     {
-        glfwPollEvents();
+        fprintf(stderr, "Failed to enumerate instance extension properties: %d\n", enumInstanceExtPropResult);
+#ifdef __APPLE__
+        free(requiredExtensions);
+#endif
+        return APP_ERROR_VULKAN_ENUM_INSTANCE_EXT_PROP;
     }
 
-    // Cleanup
-    vkDestroyInstance(instance, NULL);
+    VkExtensionProperties *extensions = malloc(sizeof(VkExtensionProperties) * extensionCount);
+    if (!extensions)
+    {
+        fprintf(stderr, "Failed to allocate memory for extensions\n");
+#ifdef __APPLE__
+        free(requiredExtensions);
+#endif
+        return APP_ERROR_MALLOC;
+    }
+    vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, extensions);
+
+    printf("Available Vulkan extensions:\n");
+    for (uint32_t i = 0; i < extensionCount; ++i)
+    {
+        printf("\t%s\n", extensions[i].extensionName);
+    }
+
 #ifdef __APPLE__
     free(requiredExtensions);
 #endif
-    glfwDestroyWindow(window);
+
+    free(extensions);
+
+    return APP_SUCCESS;
+}
+
+AppResult cleanup(App *app, AppResult result)
+{
+    if (app->instance != VK_NULL_HANDLE)
+    {
+        vkDestroyInstance(app->instance, NULL);
+    }
+
+    if (app->window != NULL)
+    {
+        glfwDestroyWindow(app->window);
+    }
+
     glfwTerminate();
 
-    return 0;
+    return result;
 }
