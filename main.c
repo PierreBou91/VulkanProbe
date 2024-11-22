@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -33,10 +34,13 @@ typedef enum AppResult
     APP_ERROR_GLFW_WINDOW = 3,
     APP_ERROR_VULKAN_INSTANCE = 4,
     APP_ERROR_VULKAN_ENUM_INSTANCE_EXT_PROP = 5,
+    APP_ERROR_VULKAN_ENUM_INSTANCE_LAYER_PROP = 6,
+    APP_ERROR_VALIDATION_LAYER_NOT_FOUND = 7,
 } AppResult;
 
 AppResult initGLFW(App *app);
 AppResult initVulkan(App *app);
+AppResult checkValidationLayerSupport(void);
 AppResult cleanup(App *app, AppResult result);
 
 int main(void)
@@ -66,7 +70,56 @@ int main(void)
     }
 
     return cleanup(&app, APP_SUCCESS);
-}
+} // main
+
+AppResult checkValidationLayerSupport(void)
+{
+    uint32_t layerCount;
+    VkResult result = vkEnumerateInstanceLayerProperties(&layerCount, NULL);
+    if (result != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to enumerate instance layer properties: %d\n", result);
+        return APP_ERROR_VULKAN_ENUM_INSTANCE_LAYER_PROP;
+    }
+
+    VkLayerProperties *availableLayers = malloc(sizeof(VkLayerProperties) * layerCount);
+    if (!availableLayers)
+    {
+        fprintf(stderr, "Failed to allocate memory for available layers\n");
+        return APP_ERROR_MALLOC;
+    }
+
+    result = vkEnumerateInstanceLayerProperties(&layerCount, availableLayers);
+    if (result != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to enumerate instance layer properties: %d\n", result);
+        free(availableLayers);
+        return APP_ERROR_VULKAN_ENUM_INSTANCE_LAYER_PROP;
+    }
+
+    for (uint32_t i = 0; i < sizeof(validationLayers) / sizeof(validationLayers[0]); ++i)
+    {
+        bool layerFound = false;
+        for (uint32_t j = 0; j < layerCount; ++j)
+        {
+            if (strcmp(validationLayers[i], availableLayers[j].layerName) == 0)
+            {
+                layerFound = true;
+                break;
+            }
+        }
+
+        if (!layerFound)
+        {
+            fprintf(stderr, "ERROR: Validation layer %s not found\n", validationLayers[i]);
+            free(availableLayers);
+            return APP_ERROR_VALIDATION_LAYER_NOT_FOUND;
+        }
+    }
+
+    free(availableLayers);
+    return APP_SUCCESS;
+} // checkValidationLayerSupport
 
 AppResult initGLFW(App *app)
 {
@@ -87,7 +140,7 @@ AppResult initGLFW(App *app)
     }
 
     return APP_SUCCESS;
-}
+} // initGLFW
 
 AppResult initVulkan(App *app)
 {
@@ -146,6 +199,17 @@ AppResult initVulkan(App *app)
 #endif
     };
 
+    if (enableValidationLayers)
+    {
+        AppResult result = checkValidationLayerSupport();
+        if (result != APP_SUCCESS)
+        {
+            return result;
+        }
+        createInfo.enabledLayerCount = sizeof(validationLayers) / sizeof(validationLayers[0]);
+        createInfo.ppEnabledLayerNames = validationLayers;
+    }
+
     VkResult instanceResult = vkCreateInstance(&createInfo, NULL, &app->instance);
     if (instanceResult != VK_SUCCESS)
     {
@@ -197,7 +261,7 @@ AppResult initVulkan(App *app)
     free(extensions);
 
     return APP_SUCCESS;
-}
+} // initVulkan
 
 AppResult cleanup(App *app, AppResult result)
 {
@@ -214,4 +278,4 @@ AppResult cleanup(App *app, AppResult result)
     glfwTerminate();
 
     return result;
-}
+} // cleanup
