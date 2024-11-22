@@ -63,6 +63,24 @@ int main(void)
     if (result != APP_SUCCESS)
         return cleanup(&app, result);
 
+    // VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    uint32_t deviceCount = 0;
+    vkEnumeratePhysicalDevices(app.instance, &deviceCount, NULL);
+    if (deviceCount == 0)
+    {
+        fprintf(stderr, "Failed to find GPUs with Vulkan support\n");
+        return cleanup(&app, APP_ERROR_VULKAN_INSTANCE); // TODO: define a new error code
+    }
+    VkPhysicalDevice *devices = malloc(sizeof(VkPhysicalDevice) * deviceCount);
+    vkEnumeratePhysicalDevices(app.instance, &deviceCount, devices);
+
+    for (uint32_t i = 0; i < deviceCount; ++i)
+    {
+        VkPhysicalDeviceProperties deviceProperties;
+        vkGetPhysicalDeviceProperties(devices[i], &deviceProperties);
+        printf("Device %d: %s\n", i, deviceProperties.deviceName);
+    }
+
     // Main loop
     while (!glfwWindowShouldClose(app.window))
     {
@@ -240,18 +258,13 @@ AppResult initVulkan(App *app)
 #endif
         return APP_ERROR_MALLOC;
     }
-    vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, extensions);
 
-    printf("Available Vulkan extensions:\n");
-    for (uint32_t i = 0; i < extensionCount; ++i)
+    enumInstanceExtPropResult = vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, extensions);
+    if (enumInstanceExtPropResult != VK_SUCCESS)
     {
-        printf("\t%s\n", extensions[i].extensionName);
-    }
-
-    printf("Required glfw extensions:\n");
-    for (uint32_t i = 0; i < glfwExtensionCount; ++i)
-    {
-        printf("\t%s\n", glfwExtensions[i]);
+        fprintf(stderr, "Failed to enumerate instance extension properties: %d\n", enumInstanceExtPropResult);
+        free(extensions);
+        return APP_ERROR_VULKAN_ENUM_INSTANCE_EXT_PROP;
     }
 
 #ifdef __APPLE__
