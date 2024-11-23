@@ -24,6 +24,7 @@ typedef struct App
 {
     GLFWwindow *window;
     VkInstance instance;
+    VkPhysicalDevice physicalDevice;
 } App;
 
 typedef enum AppResult
@@ -36,11 +37,16 @@ typedef enum AppResult
     APP_ERROR_VULKAN_ENUM_INSTANCE_EXT_PROP = 5,
     APP_ERROR_VULKAN_ENUM_INSTANCE_LAYER_PROP = 6,
     APP_ERROR_VALIDATION_LAYER_NOT_FOUND = 7,
+    APP_ERROR_NO_PHYSICAL_DEVICE = 8,
+    APP_ERROR_VULKAN_ENUM_PHYSICAL_DEVICE = 9,
 } AppResult;
 
 AppResult initGLFW(App *app);
 AppResult initVulkan(App *app);
 AppResult checkValidationLayerSupport(void);
+AppResult selectPhysicalDevice(App *app);
+uint32_t computeDeviceScore(VkPhysicalDevice device);
+AppResult deviceHasGraphicsQueueFamily(VkPhysicalDevice device, bool *hasGraphicsQueueFamily);
 AppResult cleanup(App *app, AppResult result);
 
 int main(void)
@@ -53,7 +59,7 @@ int main(void)
 
     App app = {0};
 
-    AppResult result = {0};
+    AppResult result;
 
     result = initGLFW(&app);
     if (result != APP_SUCCESS)
@@ -63,23 +69,9 @@ int main(void)
     if (result != APP_SUCCESS)
         return cleanup(&app, result);
 
-    // VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
-    uint32_t deviceCount = 0;
-    vkEnumeratePhysicalDevices(app.instance, &deviceCount, NULL);
-    if (deviceCount == 0)
-    {
-        fprintf(stderr, "Failed to find GPUs with Vulkan support\n");
-        return cleanup(&app, APP_ERROR_VULKAN_INSTANCE); // TODO: define a new error code
-    }
-    VkPhysicalDevice *devices = malloc(sizeof(VkPhysicalDevice) * deviceCount);
-    vkEnumeratePhysicalDevices(app.instance, &deviceCount, devices);
-
-    for (uint32_t i = 0; i < deviceCount; ++i)
-    {
-        VkPhysicalDeviceProperties deviceProperties;
-        vkGetPhysicalDeviceProperties(devices[i], &deviceProperties);
-        printf("Device %d: %s\n", i, deviceProperties.deviceName);
-    }
+    result = selectPhysicalDevice(&app);
+    if (result != APP_SUCCESS)
+        return cleanup(&app, result);
 
     // Main loop
     while (!glfwWindowShouldClose(app.window))
@@ -87,8 +79,125 @@ int main(void)
         glfwPollEvents();
     }
 
-    return cleanup(&app, APP_SUCCESS);
+    return (int)cleanup(&app, APP_SUCCESS);
 } // main
+
+AppResult selectPhysicalDevice(App *app)
+{
+    uint32_t deviceCount = 0;
+    VkResult vkResult = vkEnumeratePhysicalDevices(app->instance, &deviceCount, NULL);
+    if (vkResult != VK_SUCCESS || deviceCount == 0)
+    {
+        fprintf(stderr, "Failed to find GPUs with Vulkan support\n");
+        return APP_ERROR_NO_PHYSICAL_DEVICE;
+    }
+
+    VkPhysicalDevice *devices = malloc(sizeof(VkPhysicalDevice) * deviceCount);
+    if (!devices)
+    {
+        fprintf(stderr, "Failed to allocate memory for physical devices\n");
+        return APP_ERROR_MALLOC;
+    }
+
+    vkResult = vkEnumeratePhysicalDevices(app->instance, &deviceCount, devices);
+    if (vkResult != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to enumerate physical devices: %d\n", vkResult);
+        free(devices);
+        return APP_ERROR_VULKAN_ENUM_PHYSICAL_DEVICE;
+    }
+
+    uint32_t maxScore = 0;
+    VkPhysicalDevice selectedDevice = VK_NULL_HANDLE;
+
+    for (uint32_t i = 0; i < deviceCount; ++i)
+    {
+        bool hasGraphicsQueueFamily = false;
+        AppResult appResult = deviceHasGraphicsQueueFamily(devices[i], &hasGraphicsQueueFamily);
+        if (appResult != APP_SUCCESS)
+        {
+            free(devices);
+            return appResult;
+        }
+
+        if (hasGraphicsQueueFamily)
+        {
+            uint32_t deviceScore = computeDeviceScore(devices[i]);
+            if (deviceScore > maxScore)
+            {
+                maxScore = deviceScore;
+                selectedDevice = devices[i];
+            }
+        }
+    }
+
+    free(devices);
+
+    if (selectedDevice == VK_NULL_HANDLE)
+    {
+        fprintf(stderr, "Failed to find a suitable device\n");
+        return APP_ERROR_NO_PHYSICAL_DEVICE;
+    }
+
+    app->physicalDevice = selectedDevice;
+    return APP_SUCCESS;
+} // selectPhysicalDevice
+
+AppResult deviceHasGraphicsQueueFamily(VkPhysicalDevice device, bool *hasGraphicsQueueFamily)
+{
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, NULL);
+
+    VkQueueFamilyProperties *queueFamilies = malloc(sizeof(VkQueueFamilyProperties) * queueFamilyCount);
+    if (!queueFamilies)
+    {
+        fprintf(stderr, "Failed to allocate memory for queue families\n");
+        return APP_ERROR_MALLOC;
+    }
+
+    *hasGraphicsQueueFamily = false;
+
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies);
+
+    for (uint32_t i = 0; i < queueFamilyCount; ++i)
+    {
+        if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+        {
+            *hasGraphicsQueueFamily = true;
+            break;
+        }
+    }
+
+    free(queueFamilies);
+    return APP_SUCCESS;
+} // deviceHasGraphicsQueueFamily
+
+uint32_t computeDeviceScore(VkPhysicalDevice device)
+{
+    VkPhysicalDeviceProperties deviceProperties;
+    vkGetPhysicalDeviceProperties(device, &deviceProperties);
+    uint32_t deviceScore = 0;
+
+    if (deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+    {
+        deviceScore += 1000;
+    }
+    else if (deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
+    {
+        deviceScore += 500;
+    }
+    else if (deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU)
+    {
+        deviceScore += 250;
+    }
+    else if (deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU)
+    {
+        deviceScore += 100;
+    }
+
+    deviceScore += deviceProperties.limits.maxImageDimension2D;
+    return deviceScore;
+} // computeDeviceScore
 
 AppResult checkValidationLayerSupport(void)
 {
@@ -162,7 +271,6 @@ AppResult initGLFW(App *app)
 
 AppResult initVulkan(App *app)
 {
-
     VkApplicationInfo appInfo = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = TITLE,
@@ -264,6 +372,9 @@ AppResult initVulkan(App *app)
     {
         fprintf(stderr, "Failed to enumerate instance extension properties: %d\n", enumInstanceExtPropResult);
         free(extensions);
+#ifdef __APPLE__
+        free(requiredExtensions);
+#endif
         return APP_ERROR_VULKAN_ENUM_INSTANCE_EXT_PROP;
     }
 
