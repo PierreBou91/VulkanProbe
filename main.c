@@ -33,6 +33,7 @@ typedef struct App
     VkPhysicalDevice physicalDevice;
     VkDevice logicalDevice;
     VkQueue graphicsQueue;
+    VkSurfaceKHR surface;
 } App;
 
 typedef enum AppResult
@@ -49,6 +50,8 @@ typedef enum AppResult
     APP_ERROR_VULKAN_ENUM_PHYSICAL_DEVICE = 9,
     APP_ERROR_VULKAN_LOGICAL_DEVICE = 10,
     APP_ERROR_VULKAN_NO_GRAPHICS_QUEUE_FAMILY = 11,
+    APP_ERROR_VULKAN_CREATE_SURFACE = 12,
+    APP_ERROR_VULKAN_PRESENTATION_SUPPORT = 13,
 } AppResult;
 
 AppResult initGLFW(App *app);
@@ -59,7 +62,10 @@ AppResult getGraphicsQueueFamilyIndices(VkPhysicalDevice device, uint32_t *queue
 uint32_t computeDeviceScore(VkPhysicalDevice device);
 AppResult deviceHasGraphicsQueueFamily(VkPhysicalDevice device, bool *hasGraphicsQueueFamily);
 AppResult createLogicalDevice(App *app);
+AppResult createSurface(App *app);
 AppResult cleanup(App *app, AppResult result);
+AppResult deviceHasPresentationQueueFamily(VkPhysicalDevice device, VkSurfaceKHR surface, bool *hasPresentationQueueFamily);
+AppResult getPresentationQueueFamilyIndices(VkPhysicalDevice device, VkSurfaceKHR surface, uint32_t *pQueueFamilyIndicesCount, uint32_t *pQueueFamilyIndices);
 
 int main(void)
 {
@@ -81,6 +87,11 @@ int main(void)
     if (result != APP_SUCCESS)
         return cleanup(&app, result);
 
+    // Below could be moved inside initVulkan
+    result = createSurface(&app);
+    if (result != APP_SUCCESS)
+        return cleanup(&app, result);
+
     result = selectPhysicalDevice(&app);
     if (result != APP_SUCCESS)
         return cleanup(&app, result);
@@ -88,6 +99,38 @@ int main(void)
     result = createLogicalDevice(&app);
     if (result != APP_SUCCESS)
         return cleanup(&app, result);
+
+    // Graphics queue family idices
+    printf("Graphics queue family indices:\n");
+    uint32_t graphicsQueueIndicesCount = 0;
+    result = getGraphicsQueueFamilyIndices(app.physicalDevice, &graphicsQueueIndicesCount, NULL);
+    if (result != APP_SUCCESS)
+        return cleanup(&app, result);
+    uint32_t graphicsQueueIndices[graphicsQueueIndicesCount];
+    result = getGraphicsQueueFamilyIndices(app.physicalDevice, &graphicsQueueIndicesCount, graphicsQueueIndices);
+    if (result != APP_SUCCESS)
+        return cleanup(&app, result);
+    for (uint32_t i = 0; i < graphicsQueueIndicesCount; ++i)
+    {
+        printf("Graphics queue index: %d\n", graphicsQueueIndices[i]);
+    }
+
+    // Presentation queue family idices
+    printf("Presentation queue family indices:\n");
+    uint32_t presentationQueueIndicesCount = 0;
+    result = getPresentationQueueFamilyIndices(app.physicalDevice, app.surface, &presentationQueueIndicesCount, NULL);
+    if (result != APP_SUCCESS)
+        return cleanup(&app, result);
+    uint32_t presentationQueueIndices[presentationQueueIndicesCount];
+    result = getPresentationQueueFamilyIndices(app.physicalDevice, app.surface, &presentationQueueIndicesCount, presentationQueueIndices);
+    if (result != APP_SUCCESS)
+        return cleanup(&app, result);
+    for (uint32_t i = 0; i < presentationQueueIndicesCount; ++i)
+    {
+        printf("Presentation queue index: %d\n", presentationQueueIndices[i]);
+    }
+
+    // Above could be moved inside initVulkan
 
     // Main loop
     while (!glfwWindowShouldClose(app.window))
@@ -97,6 +140,16 @@ int main(void)
 
     return (int)cleanup(&app, APP_SUCCESS);
 } // main
+
+AppResult createSurface(App *app)
+{
+    if (glfwCreateWindowSurface(app->instance, app->window, NULL, &app->surface) != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to create window surface\n");
+        return APP_ERROR_VULKAN_CREATE_SURFACE;
+    }
+    return APP_SUCCESS;
+}
 
 AppResult createLogicalDevice(App *app)
 {
@@ -251,6 +304,40 @@ AppResult getGraphicsQueueFamilyIndices(VkPhysicalDevice device, uint32_t *pQueu
     return APP_SUCCESS;
 } // getGraphicsQueueFamilyIndices
 
+AppResult getPresentationQueueFamilyIndices(VkPhysicalDevice device, VkSurfaceKHR surface, uint32_t *pQueueFamilyIndicesCount, uint32_t *pQueueFamilyIndices)
+{
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, NULL);
+
+    VkQueueFamilyProperties queueFamiliesArr[queueFamilyCount];
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamiliesArr);
+
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < queueFamilyCount; ++i)
+    {
+        VkBool32 presentationSupported = VK_FALSE;
+        VkResult result = vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentationSupported);
+        if (result != VK_SUCCESS)
+        {
+            fprintf(stderr, "Failed to check presentation support: %d\n", result);
+            return APP_ERROR_VULKAN_ENUM_PHYSICAL_DEVICE;
+        }
+
+        if (presentationSupported)
+        {
+            if (pQueueFamilyIndices != NULL)
+            {
+                pQueueFamilyIndices[count] = i;
+            }
+            count++;
+        }
+    }
+
+    *pQueueFamilyIndicesCount = count;
+
+    return APP_SUCCESS;
+} // getPresentationQueueFamilyIndices
+
 AppResult selectPhysicalDevice(App *app)
 {
     uint32_t deviceCount = 0;
@@ -279,7 +366,15 @@ AppResult selectPhysicalDevice(App *app)
         {
             return appResult;
         }
-        if (hasGraphicsQueueFamily)
+
+        bool hasPresentationQueueFamily = false;
+        appResult = deviceHasPresentationQueueFamily(deviceArr[i], app->surface, &hasPresentationQueueFamily);
+        if (appResult != APP_SUCCESS)
+        {
+            return appResult;
+        }
+
+        if (hasGraphicsQueueFamily && hasPresentationQueueFamily)
         {
             uint32_t deviceScore = computeDeviceScore(deviceArr[i]);
             if (deviceScore > maxScore)
@@ -299,6 +394,35 @@ AppResult selectPhysicalDevice(App *app)
     app->physicalDevice = selectedDevice;
     return APP_SUCCESS;
 } // selectPhysicalDevice
+AppResult deviceHasPresentationQueueFamily(VkPhysicalDevice device, VkSurfaceKHR surface, bool *hasPresentationQueueFamily)
+{
+    *hasPresentationQueueFamily = false;
+
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, NULL);
+
+    VkQueueFamilyProperties queueFamiliesArr[queueFamilyCount];
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamiliesArr);
+
+    for (uint32_t i = 0; i < queueFamilyCount; ++i)
+    {
+        VkBool32 presentationSupported = VK_FALSE;
+        VkResult result = vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentationSupported);
+        if (result != VK_SUCCESS)
+        {
+            fprintf(stderr, "Failed to check presentation support: %d\n", result);
+            return APP_ERROR_VULKAN_PRESENTATION_SUPPORT;
+        }
+
+        if (presentationSupported)
+        {
+            *hasPresentationQueueFamily = true;
+            break;
+        }
+    }
+
+    return APP_SUCCESS;
+}
 
 AppResult deviceHasGraphicsQueueFamily(VkPhysicalDevice device, bool *hasGraphicsQueueFamily)
 {
@@ -539,19 +663,16 @@ AppResult initVulkan(App *app)
 AppResult cleanup(App *app, AppResult result)
 {
     if (app->logicalDevice != VK_NULL_HANDLE)
-    {
         vkDestroyDevice(app->logicalDevice, NULL);
-    }
+
+    if (app->surface != VK_NULL_HANDLE)
+        vkDestroySurfaceKHR(app->instance, app->surface, NULL);
 
     if (app->instance != VK_NULL_HANDLE)
-    {
         vkDestroyInstance(app->instance, NULL);
-    }
 
     if (app->window != NULL)
-    {
         glfwDestroyWindow(app->window);
-    }
 
     glfwTerminate();
 
