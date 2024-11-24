@@ -25,6 +25,8 @@ typedef struct App
     GLFWwindow *window;
     VkInstance instance;
     VkPhysicalDevice physicalDevice;
+    VkDevice logicalDevice;
+    VkQueue graphicsQueue;
 } App;
 
 typedef enum AppResult
@@ -36,17 +38,20 @@ typedef enum AppResult
     APP_ERROR_VULKAN_INSTANCE = 4,
     APP_ERROR_VULKAN_ENUM_INSTANCE_EXT_PROP = 5,
     APP_ERROR_VULKAN_ENUM_INSTANCE_LAYER_PROP = 6,
-    APP_ERROR_VALIDATION_LAYER_NOT_FOUND = 7,
-    APP_ERROR_NO_PHYSICAL_DEVICE = 8,
+    APP_ERROR_VULKAN_VALIDATION_LAYER_NOT_FOUND = 7,
+    APP_ERROR_VULKAN_NO_PHYSICAL_DEVICE = 8,
     APP_ERROR_VULKAN_ENUM_PHYSICAL_DEVICE = 9,
+    APP_ERROR_VULKAN_LOGICAL_DEVICE = 10,
 } AppResult;
 
 AppResult initGLFW(App *app);
 AppResult initVulkan(App *app);
 AppResult checkValidationLayerSupport(void);
 AppResult selectPhysicalDevice(App *app);
+AppResult getGraphicsQueueFamilyIndices(VkPhysicalDevice device, uint32_t *queueFamilyIndicesCount, uint32_t *queueFamilyIndices);
 uint32_t computeDeviceScore(VkPhysicalDevice device);
 AppResult deviceHasGraphicsQueueFamily(VkPhysicalDevice device, bool *hasGraphicsQueueFamily);
+AppResult createLogicalDevice(App *app);
 AppResult cleanup(App *app, AppResult result);
 
 int main(void)
@@ -73,8 +78,9 @@ int main(void)
     if (result != APP_SUCCESS)
         return cleanup(&app, result);
 
-    // VkDevice device;
-    // uint32_t *graphicsQueueIndices = NULL;
+    result = createLogicalDevice(&app);
+    if (result != APP_SUCCESS)
+        return cleanup(&app, result);
 
     // Main loop
     while (!glfwWindowShouldClose(app.window))
@@ -85,6 +91,86 @@ int main(void)
     return (int)cleanup(&app, APP_SUCCESS);
 } // main
 
+AppResult createLogicalDevice(App *app)
+{
+
+    uint32_t graphicsQueueIndicesCount = 0;
+    AppResult result = getGraphicsQueueFamilyIndices(app->physicalDevice, &graphicsQueueIndicesCount, NULL);
+    if (result != APP_SUCCESS)
+        return result;
+
+    uint32_t graphicsQueueIndices[graphicsQueueIndicesCount];
+    result = getGraphicsQueueFamilyIndices(app->physicalDevice, &graphicsQueueIndicesCount, graphicsQueueIndices);
+    if (result != APP_SUCCESS)
+        return result;
+
+    VkDeviceQueueCreateInfo queueCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+        .queueFamilyIndex = graphicsQueueIndices[0], // pick the first graphics queue family for the moment
+        .queueCount = 1,
+        .pQueuePriorities = (float[]){1.0f},
+    };
+
+    VkPhysicalDeviceFeatures deviceFeatures = {0}; // no special features for now
+
+    VkDeviceCreateInfo deviceCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .queueCreateInfoCount = 1,
+        .pQueueCreateInfos = &queueCreateInfo,
+        .pEnabledFeatures = &deviceFeatures,
+    };
+
+    if (enableValidationLayers)
+    {
+        // Ignored by recent Vulkan implementations but still added for compatibility
+        deviceCreateInfo.enabledLayerCount = sizeof(validationLayers) / sizeof(validationLayers[0]);
+        deviceCreateInfo.ppEnabledLayerNames = validationLayers;
+    }
+    else
+    {
+        deviceCreateInfo.enabledLayerCount = 0;
+        deviceCreateInfo.ppEnabledLayerNames = NULL;
+    }
+
+    VkResult vkResult = vkCreateDevice(app->physicalDevice, &deviceCreateInfo, NULL, &app->logicalDevice);
+    if (vkResult != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to create logical device: %d\n", vkResult);
+        return APP_ERROR_VULKAN_LOGICAL_DEVICE;
+    }
+
+    // pick the first graphics queue for now
+    vkGetDeviceQueue(app->logicalDevice, graphicsQueueIndices[0], 0, &app->graphicsQueue);
+
+    return APP_SUCCESS;
+}
+
+AppResult getGraphicsQueueFamilyIndices(VkPhysicalDevice device, uint32_t *pQueueFamilyIndicesCount, uint32_t *pQueueFamilyIndices)
+{
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, NULL);
+
+    VkQueueFamilyProperties queueFamiliesArr[queueFamilyCount];
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamiliesArr);
+
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < queueFamilyCount; ++i)
+    {
+        if (queueFamiliesArr[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+        {
+            if (pQueueFamilyIndices != NULL)
+            {
+                pQueueFamilyIndices[count] = i;
+            }
+            count++;
+        }
+    }
+
+    *pQueueFamilyIndicesCount = count;
+
+    return APP_SUCCESS;
+} // getGraphicsQueueFamilyIndices
+
 AppResult selectPhysicalDevice(App *app)
 {
     uint32_t deviceCount = 0;
@@ -92,7 +178,7 @@ AppResult selectPhysicalDevice(App *app)
     if (vkResult != VK_SUCCESS || deviceCount == 0)
     {
         fprintf(stderr, "Failed to find GPUs with Vulkan support\n");
-        return APP_ERROR_NO_PHYSICAL_DEVICE;
+        return APP_ERROR_VULKAN_NO_PHYSICAL_DEVICE;
     }
 
     VkPhysicalDevice deviceArr[deviceCount];
@@ -127,7 +213,7 @@ AppResult selectPhysicalDevice(App *app)
     if (selectedDevice == VK_NULL_HANDLE)
     {
         fprintf(stderr, "Failed to find a suitable device\n");
-        return APP_ERROR_NO_PHYSICAL_DEVICE;
+        return APP_ERROR_VULKAN_NO_PHYSICAL_DEVICE;
     }
 
     app->physicalDevice = selectedDevice;
@@ -136,6 +222,8 @@ AppResult selectPhysicalDevice(App *app)
 
 AppResult deviceHasGraphicsQueueFamily(VkPhysicalDevice device, bool *hasGraphicsQueueFamily)
 {
+    *hasGraphicsQueueFamily = false;
+
     uint32_t queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, NULL);
 
@@ -215,7 +303,7 @@ AppResult checkValidationLayerSupport(void)
         if (!layerFound)
         {
             fprintf(stderr, "ERROR: Validation layer %s not found\n", validationLayers[i]);
-            return APP_ERROR_VALIDATION_LAYER_NOT_FOUND;
+            return APP_ERROR_VULKAN_VALIDATION_LAYER_NOT_FOUND;
         }
     }
 
@@ -352,6 +440,11 @@ AppResult initVulkan(App *app)
 
 AppResult cleanup(App *app, AppResult result)
 {
+    if (app->logicalDevice != VK_NULL_HANDLE)
+    {
+        vkDestroyDevice(app->logicalDevice, NULL);
+    }
+
     if (app->instance != VK_NULL_HANDLE)
     {
         vkDestroyInstance(app->instance, NULL);
