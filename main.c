@@ -20,6 +20,12 @@ const bool enableValidationLayers = false;
 const bool enableValidationLayers = true;
 #endif
 
+#ifdef __APPLE__
+#ifndef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
+#define VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME "VK_KHR_portability_subset"
+#endif
+#endif
+
 typedef struct App
 {
     GLFWwindow *window;
@@ -42,6 +48,7 @@ typedef enum AppResult
     APP_ERROR_VULKAN_NO_PHYSICAL_DEVICE = 8,
     APP_ERROR_VULKAN_ENUM_PHYSICAL_DEVICE = 9,
     APP_ERROR_VULKAN_LOGICAL_DEVICE = 10,
+    APP_ERROR_VULKAN_NO_GRAPHICS_QUEUE_FAMILY = 11,
 } AppResult;
 
 AppResult initGLFW(App *app);
@@ -93,36 +100,99 @@ int main(void)
 
 AppResult createLogicalDevice(App *app)
 {
-
     uint32_t graphicsQueueIndicesCount = 0;
     AppResult result = getGraphicsQueueFamilyIndices(app->physicalDevice, &graphicsQueueIndicesCount, NULL);
     if (result != APP_SUCCESS)
         return result;
 
-    uint32_t graphicsQueueIndices[graphicsQueueIndicesCount];
+    if (graphicsQueueIndicesCount == 0)
+    {
+        fprintf(stderr, "No graphics queue families found\n");
+        return APP_ERROR_VULKAN_NO_GRAPHICS_QUEUE_FAMILY;
+    }
+
+    uint32_t *graphicsQueueIndices = malloc(sizeof(uint32_t) * graphicsQueueIndicesCount);
+    if (!graphicsQueueIndices)
+    {
+        fprintf(stderr, "Failed to allocate memory for graphics queue indices\n");
+        return APP_ERROR_MALLOC;
+    }
+
     result = getGraphicsQueueFamilyIndices(app->physicalDevice, &graphicsQueueIndicesCount, graphicsQueueIndices);
     if (result != APP_SUCCESS)
+    {
+        free(graphicsQueueIndices);
         return result;
+    }
 
+    float queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueFamilyIndex = graphicsQueueIndices[0], // pick the first graphics queue family for the moment
+        .queueFamilyIndex = graphicsQueueIndices[0], // Use the first graphics queue family
         .queueCount = 1,
-        .pQueuePriorities = (float[]){1.0f},
+        .pQueuePriorities = &queuePriority,
     };
 
-    VkPhysicalDeviceFeatures deviceFeatures = {0}; // no special features for now
+    VkPhysicalDeviceFeatures deviceFeatures = {0}; // No special features for now
+
+    // Enumerate device extensions
+    uint32_t deviceExtensionCount = 0;
+    vkEnumerateDeviceExtensionProperties(app->physicalDevice, NULL, &deviceExtensionCount, NULL);
+
+    VkExtensionProperties *availableDeviceExtensions = malloc(sizeof(VkExtensionProperties) * deviceExtensionCount);
+    if (!availableDeviceExtensions)
+    {
+        fprintf(stderr, "Failed to allocate memory for device extensions\n");
+        free(graphicsQueueIndices);
+        return APP_ERROR_MALLOC;
+    }
+
+    vkEnumerateDeviceExtensionProperties(app->physicalDevice, NULL, &deviceExtensionCount, availableDeviceExtensions);
+
+    // Determine required device extensions
+    uint32_t requiredDeviceExtensionCount = 0;
+    const char **requiredDeviceExtensions = NULL;
+
+#ifdef __APPLE__
+    bool portabilitySubsetExtensionFound = false;
+    for (uint32_t i = 0; i < deviceExtensionCount; ++i)
+    {
+        if (strcmp(availableDeviceExtensions[i].extensionName, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME) == 0)
+        {
+            portabilitySubsetExtensionFound = true;
+            break;
+        }
+    }
+
+    if (portabilitySubsetExtensionFound)
+    {
+        requiredDeviceExtensionCount = 1;
+        requiredDeviceExtensions = malloc(sizeof(char *) * requiredDeviceExtensionCount);
+        if (!requiredDeviceExtensions)
+        {
+            fprintf(stderr, "Failed to allocate memory for required device extensions\n");
+            free(availableDeviceExtensions);
+            free(graphicsQueueIndices);
+            return APP_ERROR_MALLOC;
+        }
+        requiredDeviceExtensions[0] = VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
+    }
+#else
+    requiredDeviceExtensionCount = 0;
+    requiredDeviceExtensions = NULL;
+#endif
 
     VkDeviceCreateInfo deviceCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = &queueCreateInfo,
         .pEnabledFeatures = &deviceFeatures,
+        .enabledExtensionCount = requiredDeviceExtensionCount,
+        .ppEnabledExtensionNames = requiredDeviceExtensions,
     };
 
     if (enableValidationLayers)
     {
-        // Ignored by recent Vulkan implementations but still added for compatibility
         deviceCreateInfo.enabledLayerCount = sizeof(validationLayers) / sizeof(validationLayers[0]);
         deviceCreateInfo.ppEnabledLayerNames = validationLayers;
     }
@@ -136,11 +206,21 @@ AppResult createLogicalDevice(App *app)
     if (vkResult != VK_SUCCESS)
     {
         fprintf(stderr, "Failed to create logical device: %d\n", vkResult);
+#ifdef __APPLE__
+        free(requiredDeviceExtensions);
+#endif
+        free(availableDeviceExtensions);
+        free(graphicsQueueIndices);
         return APP_ERROR_VULKAN_LOGICAL_DEVICE;
     }
 
-    // pick the first graphics queue for now
     vkGetDeviceQueue(app->logicalDevice, graphicsQueueIndices[0], 0, &app->graphicsQueue);
+
+#ifdef __APPLE__
+    free(requiredDeviceExtensions);
+#endif
+    free(availableDeviceExtensions);
+    free(graphicsQueueIndices);
 
     return APP_SUCCESS;
 }
@@ -348,17 +428,49 @@ AppResult initVulkan(App *app)
     uint32_t requiredExtensionCount = glfwExtensionCount;
     const char **requiredExtensions = NULL;
 
-#ifdef __APPLE__
-    // On macOS, we need to enable the VK_KHR_portability_enumeration extension
-    // and set the VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR flag
-    // https://vulkan-tutorial.com/en/Drawing_a_triangle/Setup/Instance cf the "Encountered
-    // VK_ERROR_INCOMPATIBLE_DRIVER section"
+    // Enumerate available instance extensions
+    uint32_t availableExtensionCount = 0;
+    VkResult result = vkEnumerateInstanceExtensionProperties(NULL, &availableExtensionCount, NULL);
+    if (result != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to enumerate instance extension properties: %d\n", result);
+        return APP_ERROR_VULKAN_ENUM_INSTANCE_EXT_PROP;
+    }
 
-    requiredExtensionCount += 1;
+    VkExtensionProperties *availableExtensions = malloc(sizeof(VkExtensionProperties) * availableExtensionCount);
+    if (!availableExtensions)
+    {
+        fprintf(stderr, "Failed to allocate memory for instance extensions\n");
+        return APP_ERROR_MALLOC;
+    }
+
+    result = vkEnumerateInstanceExtensionProperties(NULL, &availableExtensionCount, availableExtensions);
+    if (result != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to enumerate instance extension properties: %d\n", result);
+        free(availableExtensions);
+        return APP_ERROR_VULKAN_ENUM_INSTANCE_EXT_PROP;
+    }
+
+#ifdef __APPLE__
+// Define the missing macro if necessary
+#ifndef VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME
+#define VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME "VK_KHR_get_physical_device_properties2"
+#endif
+
+    // Additional required extensions
+    const char *additionalExtensions[] = {
+        VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
+        VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME};
+
+    uint32_t additionalExtensionCount = sizeof(additionalExtensions) / sizeof(additionalExtensions[0]);
+
+    requiredExtensionCount += additionalExtensionCount;
     requiredExtensions = malloc(sizeof(char *) * requiredExtensionCount);
     if (!requiredExtensions)
     {
         fprintf(stderr, "Failed to allocate memory for required extensions\n");
+        free(availableExtensions);
         return APP_ERROR_MALLOC;
     }
 
@@ -367,7 +479,10 @@ AppResult initVulkan(App *app)
         requiredExtensions[i] = glfwExtensions[i];
     }
 
-    requiredExtensions[glfwExtensionCount] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+    for (uint32_t i = 0; i < additionalExtensionCount; ++i)
+    {
+        requiredExtensions[glfwExtensionCount + i] = additionalExtensions[i];
+    }
 #else
     requiredExtensions = glfwExtensions;
 #endif
@@ -392,48 +507,31 @@ AppResult initVulkan(App *app)
         AppResult result = checkValidationLayerSupport();
         if (result != APP_SUCCESS)
         {
+            free(availableExtensions);
+#ifdef __APPLE__
+            free(requiredExtensions);
+#endif
             return result;
         }
         createInfo.enabledLayerCount = sizeof(validationLayers) / sizeof(validationLayers[0]);
         createInfo.ppEnabledLayerNames = validationLayers;
     }
 
-    VkResult instanceResult = vkCreateInstance(&createInfo, NULL, &app->instance);
-    if (instanceResult != VK_SUCCESS)
+    result = vkCreateInstance(&createInfo, NULL, &app->instance);
+    if (result != VK_SUCCESS)
     {
-        fprintf(stderr, "Failed to create Vulkan instance: %d\n", instanceResult);
+        fprintf(stderr, "Failed to create Vulkan instance: %d\n", result);
 #ifdef __APPLE__
         free(requiredExtensions);
 #endif
+        free(availableExtensions);
         return APP_ERROR_VULKAN_INSTANCE;
-    }
-
-    uint32_t extensionCount = 0;
-    VkResult enumInstanceExtPropResult = vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, NULL);
-    if (enumInstanceExtPropResult != VK_SUCCESS)
-    {
-        fprintf(stderr, "Failed to enumerate instance extension properties: %d\n", enumInstanceExtPropResult);
-#ifdef __APPLE__
-        free(requiredExtensions);
-#endif
-        return APP_ERROR_VULKAN_ENUM_INSTANCE_EXT_PROP;
-    }
-
-    VkExtensionProperties extensionArr[extensionCount];
-
-    enumInstanceExtPropResult = vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, extensionArr);
-    if (enumInstanceExtPropResult != VK_SUCCESS)
-    {
-        fprintf(stderr, "Failed to enumerate instance extension properties: %d\n", enumInstanceExtPropResult);
-#ifdef __APPLE__
-        free(requiredExtensions);
-#endif
-        return APP_ERROR_VULKAN_ENUM_INSTANCE_EXT_PROP;
     }
 
 #ifdef __APPLE__
     free(requiredExtensions);
 #endif
+    free(availableExtensions);
 
     return APP_SUCCESS;
 } // initVulkan
