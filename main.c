@@ -73,6 +73,9 @@ int main(void)
     if (result != APP_SUCCESS)
         return cleanup(&app, result);
 
+    // VkDevice device;
+    // uint32_t *graphicsQueueIndices = NULL;
+
     // Main loop
     while (!glfwWindowShouldClose(app.window))
     {
@@ -92,46 +95,34 @@ AppResult selectPhysicalDevice(App *app)
         return APP_ERROR_NO_PHYSICAL_DEVICE;
     }
 
-    VkPhysicalDevice *devices = malloc(sizeof(VkPhysicalDevice) * deviceCount);
-    if (!devices)
-    {
-        fprintf(stderr, "Failed to allocate memory for physical devices\n");
-        return APP_ERROR_MALLOC;
-    }
-
-    vkResult = vkEnumeratePhysicalDevices(app->instance, &deviceCount, devices);
+    VkPhysicalDevice deviceArr[deviceCount];
+    vkResult = vkEnumeratePhysicalDevices(app->instance, &deviceCount, deviceArr);
     if (vkResult != VK_SUCCESS)
     {
         fprintf(stderr, "Failed to enumerate physical devices: %d\n", vkResult);
-        free(devices);
         return APP_ERROR_VULKAN_ENUM_PHYSICAL_DEVICE;
     }
 
-    uint32_t maxScore = 0;
     VkPhysicalDevice selectedDevice = VK_NULL_HANDLE;
-
+    uint32_t maxScore = 0;
     for (uint32_t i = 0; i < deviceCount; ++i)
     {
         bool hasGraphicsQueueFamily = false;
-        AppResult appResult = deviceHasGraphicsQueueFamily(devices[i], &hasGraphicsQueueFamily);
+        AppResult appResult = deviceHasGraphicsQueueFamily(deviceArr[i], &hasGraphicsQueueFamily);
         if (appResult != APP_SUCCESS)
         {
-            free(devices);
             return appResult;
         }
-
         if (hasGraphicsQueueFamily)
         {
-            uint32_t deviceScore = computeDeviceScore(devices[i]);
+            uint32_t deviceScore = computeDeviceScore(deviceArr[i]);
             if (deviceScore > maxScore)
             {
                 maxScore = deviceScore;
-                selectedDevice = devices[i];
+                selectedDevice = deviceArr[i];
             }
         }
     }
-
-    free(devices);
 
     if (selectedDevice == VK_NULL_HANDLE)
     {
@@ -148,27 +139,18 @@ AppResult deviceHasGraphicsQueueFamily(VkPhysicalDevice device, bool *hasGraphic
     uint32_t queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, NULL);
 
-    VkQueueFamilyProperties *queueFamilies = malloc(sizeof(VkQueueFamilyProperties) * queueFamilyCount);
-    if (!queueFamilies)
-    {
-        fprintf(stderr, "Failed to allocate memory for queue families\n");
-        return APP_ERROR_MALLOC;
-    }
-
-    *hasGraphicsQueueFamily = false;
-
-    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies);
+    VkQueueFamilyProperties queueFamiliesArr[queueFamilyCount];
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamiliesArr);
 
     for (uint32_t i = 0; i < queueFamilyCount; ++i)
     {
-        if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+        if (queueFamiliesArr[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
         {
             *hasGraphicsQueueFamily = true;
             break;
         }
     }
 
-    free(queueFamilies);
     return APP_SUCCESS;
 } // deviceHasGraphicsQueueFamily
 
@@ -196,6 +178,7 @@ uint32_t computeDeviceScore(VkPhysicalDevice device)
     }
 
     deviceScore += deviceProperties.limits.maxImageDimension2D;
+
     return deviceScore;
 } // computeDeviceScore
 
@@ -209,18 +192,11 @@ AppResult checkValidationLayerSupport(void)
         return APP_ERROR_VULKAN_ENUM_INSTANCE_LAYER_PROP;
     }
 
-    VkLayerProperties *availableLayers = malloc(sizeof(VkLayerProperties) * layerCount);
-    if (!availableLayers)
-    {
-        fprintf(stderr, "Failed to allocate memory for available layers\n");
-        return APP_ERROR_MALLOC;
-    }
-
-    result = vkEnumerateInstanceLayerProperties(&layerCount, availableLayers);
+    VkLayerProperties availableLayersArr[layerCount];
+    result = vkEnumerateInstanceLayerProperties(&layerCount, availableLayersArr);
     if (result != VK_SUCCESS)
     {
         fprintf(stderr, "Failed to enumerate instance layer properties: %d\n", result);
-        free(availableLayers);
         return APP_ERROR_VULKAN_ENUM_INSTANCE_LAYER_PROP;
     }
 
@@ -229,7 +205,7 @@ AppResult checkValidationLayerSupport(void)
         bool layerFound = false;
         for (uint32_t j = 0; j < layerCount; ++j)
         {
-            if (strcmp(validationLayers[i], availableLayers[j].layerName) == 0)
+            if (strcmp(validationLayers[i], availableLayersArr[j].layerName) == 0)
             {
                 layerFound = true;
                 break;
@@ -239,12 +215,10 @@ AppResult checkValidationLayerSupport(void)
         if (!layerFound)
         {
             fprintf(stderr, "ERROR: Validation layer %s not found\n", validationLayers[i]);
-            free(availableLayers);
             return APP_ERROR_VALIDATION_LAYER_NOT_FOUND;
         }
     }
 
-    free(availableLayers);
     return APP_SUCCESS;
 } // checkValidationLayerSupport
 
@@ -289,7 +263,7 @@ AppResult initVulkan(App *app)
 #ifdef __APPLE__
     // On macOS, we need to enable the VK_KHR_portability_enumeration extension
     // and set the VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR flag
-    // https://vulkan-tutorial.com/en/Drawing_a_triangle/Setup/Instance cf the ¨Encountered
+    // https://vulkan-tutorial.com/en/Drawing_a_triangle/Setup/Instance cf the "Encountered
     // VK_ERROR_INCOMPATIBLE_DRIVER section"
 
     requiredExtensionCount += 1;
@@ -357,21 +331,12 @@ AppResult initVulkan(App *app)
         return APP_ERROR_VULKAN_ENUM_INSTANCE_EXT_PROP;
     }
 
-    VkExtensionProperties *extensions = malloc(sizeof(VkExtensionProperties) * extensionCount);
-    if (!extensions)
-    {
-        fprintf(stderr, "Failed to allocate memory for extensions\n");
-#ifdef __APPLE__
-        free(requiredExtensions);
-#endif
-        return APP_ERROR_MALLOC;
-    }
+    VkExtensionProperties extensionArr[extensionCount];
 
-    enumInstanceExtPropResult = vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, extensions);
+    enumInstanceExtPropResult = vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, extensionArr);
     if (enumInstanceExtPropResult != VK_SUCCESS)
     {
         fprintf(stderr, "Failed to enumerate instance extension properties: %d\n", enumInstanceExtPropResult);
-        free(extensions);
 #ifdef __APPLE__
         free(requiredExtensions);
 #endif
@@ -381,8 +346,6 @@ AppResult initVulkan(App *app)
 #ifdef __APPLE__
     free(requiredExtensions);
 #endif
-
-    free(extensions);
 
     return APP_SUCCESS;
 } // initVulkan
