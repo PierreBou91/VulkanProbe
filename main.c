@@ -33,6 +33,7 @@ typedef struct App
     VkPhysicalDevice physicalDevice;
     VkDevice logicalDevice;
     VkQueue graphicsQueue;
+    VkQueue presentationQueue;
     VkSurfaceKHR surface;
 } App;
 
@@ -100,42 +101,14 @@ int main(void)
     if (result != APP_SUCCESS)
         return cleanup(&app, result);
 
-    // Graphics queue family idices
-    printf("Graphics queue family indices:\n");
-    uint32_t graphicsQueueIndicesCount = 0;
-    result = getGraphicsQueueFamilyIndices(app.physicalDevice, &graphicsQueueIndicesCount, NULL);
-    if (result != APP_SUCCESS)
-        return cleanup(&app, result);
-    uint32_t graphicsQueueIndices[graphicsQueueIndicesCount];
-    result = getGraphicsQueueFamilyIndices(app.physicalDevice, &graphicsQueueIndicesCount, graphicsQueueIndices);
-    if (result != APP_SUCCESS)
-        return cleanup(&app, result);
-    for (uint32_t i = 0; i < graphicsQueueIndicesCount; ++i)
-    {
-        printf("Graphics queue index: %d\n", graphicsQueueIndices[i]);
-    }
-
-    // Presentation queue family idices
-    printf("Presentation queue family indices:\n");
-    uint32_t presentationQueueIndicesCount = 0;
-    result = getPresentationQueueFamilyIndices(app.physicalDevice, app.surface, &presentationQueueIndicesCount, NULL);
-    if (result != APP_SUCCESS)
-        return cleanup(&app, result);
-    uint32_t presentationQueueIndices[presentationQueueIndicesCount];
-    result = getPresentationQueueFamilyIndices(app.physicalDevice, app.surface, &presentationQueueIndicesCount, presentationQueueIndices);
-    if (result != APP_SUCCESS)
-        return cleanup(&app, result);
-    for (uint32_t i = 0; i < presentationQueueIndicesCount; ++i)
-    {
-        printf("Presentation queue index: %d\n", presentationQueueIndices[i]);
-    }
-
     // Above could be moved inside initVulkan
 
     // Main loop
     while (!glfwWindowShouldClose(app.window))
     {
         glfwPollEvents();
+        if (glfwGetKey(app.window, GLFW_KEY_SPACE) == GLFW_PRESS)
+            glfwSetWindowShouldClose(app.window, GLFW_TRUE);
     }
 
     return (int)cleanup(&app, APP_SUCCESS);
@@ -151,8 +124,9 @@ AppResult createSurface(App *app)
     return APP_SUCCESS;
 }
 
-AppResult createLogicalDevice(App *app)
+AppResult createGraphicsQueueCreateInfo(App *app, VkDeviceQueueCreateInfo *queueCreateInfo, uint32_t *graphicsQueueIndex)
 {
+
     uint32_t graphicsQueueIndicesCount = 0;
     AppResult result = getGraphicsQueueFamilyIndices(app->physicalDevice, &graphicsQueueIndicesCount, NULL);
     if (result != APP_SUCCESS)
@@ -178,71 +152,137 @@ AppResult createLogicalDevice(App *app)
         return result;
     }
 
+    *graphicsQueueIndex = graphicsQueueIndices[0];
+
     float queuePriority = 1.0f;
-    VkDeviceQueueCreateInfo queueCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueFamilyIndex = graphicsQueueIndices[0], // Use the first graphics queue family
-        .queueCount = 1,
-        .pQueuePriorities = &queuePriority,
-    };
-
-    VkPhysicalDeviceFeatures deviceFeatures = {0}; // No special features for now
-
-    // Enumerate device extensions
-    uint32_t deviceExtensionCount = 0;
-    vkEnumerateDeviceExtensionProperties(app->physicalDevice, NULL, &deviceExtensionCount, NULL);
-
-    VkExtensionProperties *availableDeviceExtensions = malloc(sizeof(VkExtensionProperties) * deviceExtensionCount);
-    if (!availableDeviceExtensions)
+    if (!queueCreateInfo)
     {
-        fprintf(stderr, "Failed to allocate memory for device extensions\n");
         free(graphicsQueueIndices);
+        return APP_SUCCESS;
+    }
+    queueCreateInfo->sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queueCreateInfo->queueFamilyIndex = graphicsQueueIndices[0]; // Arbitrarily use the first graphics queue family
+    queueCreateInfo->queueCount = 1;
+    queueCreateInfo->pQueuePriorities = &queuePriority;
+
+    free(graphicsQueueIndices);
+    return APP_SUCCESS;
+} // createGraphicsQueueCreateInfo
+
+AppResult createPresentationCreateInfo(App *app, VkDeviceQueueCreateInfo *queueCreateInfo, uint32_t *presentationQueueIndex)
+{
+    uint32_t presentationQueueIndicesCount = 0;
+    AppResult result = getPresentationQueueFamilyIndices(app->physicalDevice, app->surface, &presentationQueueIndicesCount, NULL);
+    if (result != APP_SUCCESS)
+        return result;
+
+    if (presentationQueueIndicesCount == 0)
+    {
+        fprintf(stderr, "No presentation queue families found\n");
+        return APP_ERROR_VULKAN_PRESENTATION_SUPPORT;
+    }
+
+    uint32_t *presentationQueueIndices = malloc(sizeof(uint32_t) * presentationQueueIndicesCount);
+    if (!presentationQueueIndices)
+    {
+        fprintf(stderr, "Failed to allocate memory for presentation queue indices\n");
         return APP_ERROR_MALLOC;
     }
 
-    vkEnumerateDeviceExtensionProperties(app->physicalDevice, NULL, &deviceExtensionCount, availableDeviceExtensions);
+    result = getPresentationQueueFamilyIndices(app->physicalDevice, app->surface, &presentationQueueIndicesCount, presentationQueueIndices);
+    if (result != APP_SUCCESS)
+    {
+        free(presentationQueueIndices);
+        return result;
+    }
 
-    // Determine required device extensions
+    *presentationQueueIndex = presentationQueueIndices[0];
+
+    if (!queueCreateInfo)
+    {
+        free(presentationQueueIndices);
+        return APP_SUCCESS;
+    }
+
+    float queuePriority = 1.0f;
+    queueCreateInfo->sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queueCreateInfo->queueFamilyIndex = presentationQueueIndices[0]; // Arbitrarily use the first presentation queue family
+    queueCreateInfo->queueCount = 1;
+    queueCreateInfo->pQueuePriorities = &queuePriority;
+
+    free(presentationQueueIndices);
+    return APP_SUCCESS;
+} // createPresentationCreateInfo
+
+AppResult createLogicalDevice(App *app)
+{
+    uint32_t graphicsQueueIndex = UINT32_MAX;
+    AppResult result = createGraphicsQueueCreateInfo(app, NULL, &graphicsQueueIndex);
+    if (result != APP_SUCCESS)
+        return result;
+
+    uint32_t presentationQueueIndex = UINT32_MAX;
+    result = createPresentationCreateInfo(app, NULL, &presentationQueueIndex);
+    if (result != APP_SUCCESS)
+        return result;
+
+    uint32_t uniqueQueueFamilyCount = 0;
+    VkDeviceQueueCreateInfo queueCreateInfos[2];
+    memset(queueCreateInfos, 0, sizeof(queueCreateInfos)); // Zero-initialize the array
+    float queuePriority = 1.0f;
+
+    if (graphicsQueueIndex == presentationQueueIndex)
+    {
+        queueCreateInfos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueCreateInfos[0].pNext = NULL; // Ensure pNext is set
+        queueCreateInfos[0].queueFamilyIndex = graphicsQueueIndex;
+        queueCreateInfos[0].queueCount = 1;
+        queueCreateInfos[0].pQueuePriorities = &queuePriority;
+        uniqueQueueFamilyCount = 1;
+    }
+    else
+    {
+        queueCreateInfos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueCreateInfos[0].pNext = NULL;
+        queueCreateInfos[0].queueFamilyIndex = graphicsQueueIndex;
+        queueCreateInfos[0].queueCount = 1;
+        queueCreateInfos[0].pQueuePriorities = &queuePriority;
+
+        queueCreateInfos[1].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueCreateInfos[1].pNext = NULL;
+        queueCreateInfos[1].queueFamilyIndex = presentationQueueIndex;
+        queueCreateInfos[1].queueCount = 1;
+        queueCreateInfos[1].pQueuePriorities = &queuePriority;
+
+        uniqueQueueFamilyCount = 2;
+    }
+
+    VkPhysicalDeviceFeatures deviceFeatures = {0}; // No special features for now
+
     uint32_t requiredDeviceExtensionCount = 0;
     const char **requiredDeviceExtensions = NULL;
 
-#ifdef __APPLE__
-    bool portabilitySubsetExtensionFound = false;
-    for (uint32_t i = 0; i < deviceExtensionCount; ++i)
-    {
-        if (strcmp(availableDeviceExtensions[i].extensionName, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME) == 0)
-        {
-            portabilitySubsetExtensionFound = true;
-            break;
-        }
-    }
+    // Enable the swapchain extension
+    const char *deviceExtensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    requiredDeviceExtensions = deviceExtensions;
+    requiredDeviceExtensionCount = 1;
 
-    if (portabilitySubsetExtensionFound)
-    {
-        requiredDeviceExtensionCount = 1;
-        requiredDeviceExtensions = malloc(sizeof(char *) * requiredDeviceExtensionCount);
-        if (!requiredDeviceExtensions)
-        {
-            fprintf(stderr, "Failed to allocate memory for required device extensions\n");
-            free(availableDeviceExtensions);
-            free(graphicsQueueIndices);
-            return APP_ERROR_MALLOC;
-        }
-        requiredDeviceExtensions[0] = VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
-    }
-#else
-    requiredDeviceExtensionCount = 0;
-    requiredDeviceExtensions = NULL;
+#ifdef __APPLE__
+    const char *additionalExtensions[] = {
+        VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
+    };
+    requiredDeviceExtensions = additionalExtensions;
+    requiredDeviceExtensionCount = sizeof(additionalExtensions) / sizeof(additionalExtensions[0]);
 #endif
 
-    VkDeviceCreateInfo deviceCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos = &queueCreateInfo,
-        .pEnabledFeatures = &deviceFeatures,
-        .enabledExtensionCount = requiredDeviceExtensionCount,
-        .ppEnabledExtensionNames = requiredDeviceExtensions,
-    };
+    VkDeviceCreateInfo deviceCreateInfo = {0}; // Zero-initialize the structure
+    deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    deviceCreateInfo.pNext = NULL;
+    deviceCreateInfo.queueCreateInfoCount = uniqueQueueFamilyCount;
+    deviceCreateInfo.pQueueCreateInfos = queueCreateInfos;
+    deviceCreateInfo.pEnabledFeatures = &deviceFeatures;
+    deviceCreateInfo.enabledExtensionCount = requiredDeviceExtensionCount;
+    deviceCreateInfo.ppEnabledExtensionNames = requiredDeviceExtensions;
 
     if (enableValidationLayers)
     {
@@ -262,21 +302,14 @@ AppResult createLogicalDevice(App *app)
 #ifdef __APPLE__
         free(requiredDeviceExtensions);
 #endif
-        free(availableDeviceExtensions);
-        free(graphicsQueueIndices);
         return APP_ERROR_VULKAN_LOGICAL_DEVICE;
     }
 
-    vkGetDeviceQueue(app->logicalDevice, graphicsQueueIndices[0], 0, &app->graphicsQueue);
-
-#ifdef __APPLE__
-    free(requiredDeviceExtensions);
-#endif
-    free(availableDeviceExtensions);
-    free(graphicsQueueIndices);
+    vkGetDeviceQueue(app->logicalDevice, graphicsQueueIndex, 0, &app->graphicsQueue);
+    vkGetDeviceQueue(app->logicalDevice, presentationQueueIndex, 0, &app->presentationQueue);
 
     return APP_SUCCESS;
-}
+} // createLogicalDevice
 
 AppResult getGraphicsQueueFamilyIndices(VkPhysicalDevice device, uint32_t *pQueueFamilyIndicesCount, uint32_t *pQueueFamilyIndices)
 {
@@ -552,7 +585,6 @@ AppResult initVulkan(App *app)
     uint32_t requiredExtensionCount = glfwExtensionCount;
     const char **requiredExtensions = NULL;
 
-    // Enumerate available instance extensions
     uint32_t availableExtensionCount = 0;
     VkResult result = vkEnumerateInstanceExtensionProperties(NULL, &availableExtensionCount, NULL);
     if (result != VK_SUCCESS)
