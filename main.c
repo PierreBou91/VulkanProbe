@@ -14,6 +14,16 @@ const char *validationLayers[] = {
     "VK_LAYER_KHRONOS_validation",
 };
 
+const char *requiredInstanceExtension[1] = {
+#ifdef __APPLE__
+    VK_KHR_SURFACE_EXTENSION_NAME,
+#endif
+};
+
+const char *deviceExtensions[1] = {
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+};
+
 #ifdef NDEBUG
 const bool enableValidationLayers = false;
 #else
@@ -53,6 +63,7 @@ typedef enum AppResult
     APP_ERROR_VULKAN_NO_GRAPHICS_QUEUE_FAMILY = 11,
     APP_ERROR_VULKAN_CREATE_SURFACE = 12,
     APP_ERROR_VULKAN_PRESENTATION_SUPPORT = 13,
+    APP_ERROR_VULKAN_ENUM_DEVICE_EXT_PROP = 14,
 } AppResult;
 
 AppResult initGLFW(App *app);
@@ -67,6 +78,9 @@ AppResult createSurface(App *app);
 AppResult cleanup(App *app, AppResult result);
 AppResult deviceHasPresentationQueueFamily(VkPhysicalDevice device, VkSurfaceKHR surface, bool *hasPresentationQueueFamily);
 AppResult getPresentationQueueFamilyIndices(VkPhysicalDevice device, VkSurfaceKHR surface, uint32_t *pQueueFamilyIndicesCount, uint32_t *pQueueFamilyIndices);
+
+// REDO
+AppResult redo(App *app);
 
 int main(void)
 {
@@ -84,22 +98,26 @@ int main(void)
     if (result != APP_SUCCESS)
         return cleanup(&app, result);
 
-    result = initVulkan(&app);
+    result = redo(&app);
     if (result != APP_SUCCESS)
         return cleanup(&app, result);
 
-    // Below could be moved inside initVulkan
-    result = createSurface(&app);
-    if (result != APP_SUCCESS)
-        return cleanup(&app, result);
+    // result = initVulkan(&app);
+    // if (result != APP_SUCCESS)
+    //     return cleanup(&app, result);
 
-    result = selectPhysicalDevice(&app);
-    if (result != APP_SUCCESS)
-        return cleanup(&app, result);
+    // // Below could be moved inside initVulkan
+    // result = createSurface(&app);
+    // if (result != APP_SUCCESS)
+    //     return cleanup(&app, result);
 
-    result = createLogicalDevice(&app);
-    if (result != APP_SUCCESS)
-        return cleanup(&app, result);
+    // result = selectPhysicalDevice(&app);
+    // if (result != APP_SUCCESS)
+    //     return cleanup(&app, result);
+
+    // result = createLogicalDevice(&app);
+    // if (result != APP_SUCCESS)
+    //     return cleanup(&app, result);
 
     // Above could be moved inside initVulkan
 
@@ -113,6 +131,51 @@ int main(void)
 
     return (int)cleanup(&app, APP_SUCCESS);
 } // main
+
+AppResult redo(App *app)
+{
+    AppResult result = {0};
+
+    result = initGLFW(app);
+    if (result != APP_SUCCESS)
+        return cleanup(app, result);
+
+    // First create a valid app info
+    VkApplicationInfo appInfo = {
+        .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+        .pNext = NULL,
+        .pApplicationName = TITLE,
+        .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
+        .pEngineName = "No Engine",
+        .engineVersion = VK_MAKE_VERSION(1, 0, 0),
+        .apiVersion = VK_API_VERSION_1_0,
+    };
+
+    // Get the required extensions from glfw
+    uint32_t glfwRequiredExtensionCount = 0;
+    const char **glfwRequiredExtensions = glfwGetRequiredInstanceExtensions(&glfwRequiredExtensionCount);
+
+    // Add this to the required extensions
+    uint32_t requiredInstanceExtensionCount = 0;
+    if (requiredInstanceExtension[0] == NULL)
+    {
+        requiredInstanceExtensionCount = glfwRequiredExtensionCount;
+    }
+    else
+    {
+        requiredInstanceExtensionCount = glfwRequiredExtensionCount + sizeof(requiredInstanceExtension) / sizeof(requiredInstanceExtension[0]);
+    }
+
+    for (uint32_t i = 0; i < glfwRequiredExtensionCount; ++i)
+    {
+        printf("Required extension from glfw: %s\n", glfwRequiredExtensions[i]);
+    }
+
+    printf("Using appinfo for the compiler to shut up: %s\n", appInfo.pApplicationName);
+    printf("Required instance extension count: %d\n", requiredInstanceExtensionCount);
+
+    return APP_SUCCESS;
+}
 
 AppResult createSurface(App *app)
 {
@@ -407,7 +470,36 @@ AppResult selectPhysicalDevice(App *app)
             return appResult;
         }
 
-        if (hasGraphicsQueueFamily && hasPresentationQueueFamily)
+        bool hasSwapchainSupport = false;
+        uint32_t extensionCount;
+        vkResult = vkEnumerateDeviceExtensionProperties(deviceArr[i], NULL, &extensionCount, NULL);
+        if (vkResult != VK_SUCCESS)
+        {
+            fprintf(stderr, "Failed to enumerate device extension properties: %d\n", vkResult);
+            return APP_ERROR_VULKAN_ENUM_DEVICE_EXT_PROP;
+        }
+        VkExtensionProperties availableExtensions[extensionCount];
+        vkResult = vkEnumerateDeviceExtensionProperties(deviceArr[i], NULL, &extensionCount, availableExtensions);
+        if (vkResult != VK_SUCCESS)
+        {
+            fprintf(stderr, "Failed to enumerate device extension properties: %d\n", vkResult);
+            return APP_ERROR_VULKAN_ENUM_DEVICE_EXT_PROP;
+        }
+
+        // Check if the required extensions are supported (for the moment only the swapchain extension)
+        for (uint32_t j = 0; j < extensionCount; ++j)
+        {
+            for (uint32_t k = 0; k < sizeof(deviceExtensions) / sizeof(deviceExtensions[0]); ++k)
+            {
+                if (strcmp(availableExtensions[j].extensionName, deviceExtensions[k]) == 0)
+                {
+                    hasSwapchainSupport = true;
+                    break;
+                }
+            }
+        }
+
+        if (hasGraphicsQueueFamily && hasPresentationQueueFamily && hasSwapchainSupport)
         {
             uint32_t deviceScore = computeDeviceScore(deviceArr[i]);
             if (deviceScore > maxScore)
@@ -427,6 +519,7 @@ AppResult selectPhysicalDevice(App *app)
     app->physicalDevice = selectedDevice;
     return APP_SUCCESS;
 } // selectPhysicalDevice
+
 AppResult deviceHasPresentationQueueFamily(VkPhysicalDevice device, VkSurfaceKHR surface, bool *hasPresentationQueueFamily)
 {
     *hasPresentationQueueFamily = false;
