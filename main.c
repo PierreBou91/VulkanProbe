@@ -6,17 +6,22 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+// User-defined constants
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
 const char *TITLE = "Vulkan Probe";
 
-const char *validationLayers[] = {
+const char *validationLayers[1] = {
     "VK_LAYER_KHRONOS_validation",
 };
 
-const char *requiredInstanceExtension[1] = {
+const char *requiredInstanceExtension[2] = {
 #ifdef __APPLE__
-    VK_KHR_SURFACE_EXTENSION_NAME,
+    // VK_KHR_SURFACE_EXTENSION_NAME,
+    VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
+    VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME
+#else
+    NULL,
 #endif
 };
 
@@ -24,10 +29,18 @@ const char *deviceExtensions[1] = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 };
 
-#ifdef NDEBUG
+#ifdef NDEBUG // pass -DNDEBUG to the compiler when building in release mode
+const bool debug = false;
 const bool enableValidationLayers = false;
 #else
+const bool debug = true;
 const bool enableValidationLayers = true;
+#endif
+
+#ifdef VERBOSE
+const bool verbose = true;
+#else
+const bool verbose = false;
 #endif
 
 #ifdef __APPLE__
@@ -84,19 +97,18 @@ AppResult redo(App *app);
 
 int main(void)
 {
-#ifdef NDEBUG // pass -DNDEBUG to the compiler when building in release mode
-    printf("Running in release mode\n");
-#else
-    printf("Running in debug mode\n");
-#endif
+    if (debug)
+        printf("Running in debug mode\n");
+    else
+        printf("Running in release mode\n");
 
     App app = {0};
 
     AppResult result;
 
-    result = initGLFW(&app);
-    if (result != APP_SUCCESS)
-        return cleanup(&app, result);
+    // result = initGLFW(&app);
+    // if (result != APP_SUCCESS)
+    //     return cleanup(&app, result);
 
     result = redo(&app);
     if (result != APP_SUCCESS)
@@ -154,6 +166,22 @@ AppResult redo(App *app)
     // Get the required extensions from glfw
     uint32_t glfwRequiredExtensionCount = 0;
     const char **glfwRequiredExtensions = glfwGetRequiredInstanceExtensions(&glfwRequiredExtensionCount);
+
+    if (verbose)
+    {
+        printf("Required extension for the Vulkan Instance:\n");
+        printf("    From GLFW:\n");
+        for (uint32_t i = 0; i < glfwRequiredExtensionCount; ++i)
+        {
+            printf("        %i. %s\n", i + 1, glfwRequiredExtensions[i]);
+        }
+
+        printf("    From the user:\n");
+        for (uint32_t i = 0; i < sizeof(requiredInstanceExtension) / sizeof(requiredInstanceExtension[0]); ++i)
+        {
+            printf("        %i. %s\n", i + 1, requiredInstanceExtension[i]);
+        }
+    }
 
     // Add this to the required extensions
     uint32_t requiredInstanceExtensionCount = 0;

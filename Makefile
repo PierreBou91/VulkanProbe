@@ -1,4 +1,4 @@
-CFLAGS = -std=c23 -Wall -Wextra -Werror -pedantic -g
+CFLAGS = -std=c17 -Wall -Wextra -Werror -pedantic -g -DVERBOSE
 
 LDFLAGS = -lglfw -lvulkan -ldl -lpthread -lX11 -lXxf86vm -lXrandr -lXi
 
