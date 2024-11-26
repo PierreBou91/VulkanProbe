@@ -6,6 +6,15 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+#ifdef __APPLE__
+#ifndef VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME
+#define VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME "VK_KHR_get_physical_device_properties2"
+#endif
+#ifndef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
+#define VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME "VK_KHR_portability_subset"
+#endif
+#endif
+
 // User-defined constants
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
@@ -15,21 +24,27 @@ const char *validationLayers[1] = {
     "VK_LAYER_KHRONOS_validation",
 };
 
-#ifdef __APPLE__
 const char *requiredInstanceExtensions[2] = {
+#ifdef __APPLE__
     VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
     VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
+#else
+    NULL,
+#endif
+};
+
+#ifdef __APPLE__
+const char *requiredDeviceExtensions[2] = {
+    VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 };
 #else
-const char *requiredInstanceExtensions[1] = {
-    NULL,
+const char *requiredDeviceExtensions[1] = {
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 };
 #endif
 
-const char *
-    requiredDeviceExtensions[1] = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-};
+#define ARRAY_LEN(x) (sizeof(x) / sizeof(x[0]))
 
 #ifdef NDEBUG // pass -DNDEBUG to the compiler when building in release mode
 const bool debug = false;
@@ -44,25 +59,21 @@ const bool verbose = true;
 #else
 const bool verbose = false;
 #endif
-
-#ifdef __APPLE__
-#ifndef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
-#define VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME "VK_KHR_portability_subset"
-#endif
-#ifndef VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME
-#define VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME "VK_KHR_get_physical_device_properties2"
-#endif
-#endif
-
 typedef struct App
 {
     GLFWwindow *window;
     VkInstance instance;
     VkPhysicalDevice physicalDevice;
-    VkDevice logicalDevice;
-    VkQueue graphicsQueue;
-    VkQueue presentationQueue;
     VkSurfaceKHR surface;
+    VkQueue graphicsQueue;
+    uint32_t graphicsQueueFamilyIndex;
+    float graphicsQueuePriority;
+    VkQueue presentationQueue;
+    uint32_t presentationQueueFamilyIndex;
+    float presentationQueuePriority;
+    VkDeviceQueueCreateInfo pQueueCreateInfos[2];
+    uint32_t queueCreateInfoCount;
+    VkDevice logicalDevice;
 } App;
 
 typedef enum AppResult
@@ -78,6 +89,11 @@ typedef enum AppResult
     APP_ERROR_GLFW_CREATE_SURFACE = 8,
     APP_ERROR_VULKAN_NO_PHYSICAL_DEVICE = 9,
     APP_ERROR_VULKAN_ENUM_PHYSICAL_DEVICE = 10,
+    APP_ERROR_VULKAN_ENUM_QUEUE_FAMILY_PROP = 11,
+    APP_ERROR_VULKAN_CANNOT_GET_PRESENTATION_SUPPORT = 12,
+    APP_ERROR_VULKAN_NO_GRAPHICS_QUEUE_FAMILY = 13,
+    APP_ERROR_VULKAN_NO_PRESENTATION_QUEUE_FAMILY = 14,
+    APP_ERROR_VULKAN_CREATE_LOGICAL_DEVICE = 15,
 } AppResult;
 
 AppResult initGLFW(App *app);
@@ -91,6 +107,8 @@ bool deviceHasRequiredExtensions(VkPhysicalDevice device);
 bool deviceHasPresentationQueueFamily(VkPhysicalDevice device, VkSurfaceKHR surface);
 bool deviceHasGraphicsQueueFamily(VkPhysicalDevice device);
 uint32_t computeDeviceScore(VkPhysicalDevice device);
+AppResult createLogicalDevice(App *app);
+AppResult getDeviceQueues(App *app);
 AppResult cleanup(App *app, AppResult result);
 
 int main(void)
@@ -166,8 +184,190 @@ AppResult initVulkan(App *app)
         printf("#########################################\n");
     }
 
+    // Now we can create the logical device
+    appResult = createLogicalDevice(app);
+    if (appResult != APP_SUCCESS)
+        return appResult;
+
+    if (verbose)
+    {
+        printf("=========================================\n");
+        printf("#########################################\n");
+        printf("#        LOGICAL DEVICE CREATED         #\n");
+        printf("#########################################\n");
+    }
+
+    // // Print the app Struct
+    // if (verbose)
+    // {
+    //     printf("=========================================\n");
+    //     printf("App Struct:\n");
+    //     printf("\tWindow: %p\n", (void *)app->window);
+    //     printf("\tInstance: %p\n", (void *)app->instance);
+    //     printf("\tPhysical Device: %p\n", (void *)app->physicalDevice);
+    //     printf("\tSurface: %p\n", (void *)app->surface);
+    //     printf("\tGraphics Queue: %p\n", (void *)app->graphicsQueue);
+    //     printf("\tGraphics Queue Family Index: %u\n", app->graphicsQueueFamilyIndex);
+    //     printf("\tGraphics Queue Priority: %f\n", app->graphicsQueuePriority);
+    //     printf("\tPresentation Queue: %p\n", (void *)app->presentationQueue);
+    //     printf("\tPresentation Queue Family Index: %u\n", app->presentationQueueFamilyIndex);
+    //     printf("\tPresentation Queue Priority: %f\n", app->presentationQueuePriority);
+    //     printf("\tLogical Device: %p\n", (void *)app->logicalDevice);
+    // }
+
     return APP_SUCCESS;
 } // initVulkan
+
+AppResult createLogicalDevice(App *app)
+{
+    AppResult appResult = {0};
+    appResult = getDeviceQueues(app);
+    if (appResult != APP_SUCCESS)
+        return appResult;
+
+    // No specific features for now
+    VkPhysicalDeviceFeatures deviceFeatures = {0};
+
+    // Now we can create the logical device
+    VkDeviceCreateInfo deviceCreateInfo = {0};
+    deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    deviceCreateInfo.pNext = NULL;
+    deviceCreateInfo.queueCreateInfoCount = app->queueCreateInfoCount;
+    deviceCreateInfo.pQueueCreateInfos = app->pQueueCreateInfos;
+    deviceCreateInfo.pEnabledFeatures = &deviceFeatures;
+    deviceCreateInfo.enabledExtensionCount = ARRAY_LEN(requiredDeviceExtensions);
+    deviceCreateInfo.ppEnabledExtensionNames = requiredDeviceExtensions;
+
+    VkResult vkResult = vkCreateDevice(app->physicalDevice, &deviceCreateInfo, NULL, &app->logicalDevice);
+    if (vkResult != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to create logical device: %d\n", vkResult);
+        return APP_ERROR_VULKAN_CREATE_LOGICAL_DEVICE;
+    }
+
+    // We can finally assign the queues
+    vkGetDeviceQueue(app->logicalDevice, app->graphicsQueueFamilyIndex, 0, &app->graphicsQueue);
+    vkGetDeviceQueue(app->logicalDevice, app->presentationQueueFamilyIndex, 0, &app->presentationQueue);
+
+    return APP_SUCCESS;
+} // createLogicalDevice
+
+AppResult getDeviceQueues(App *app)
+{
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(app->physicalDevice, &queueFamilyCount, NULL);
+
+    if (queueFamilyCount == 0)
+    {
+        fprintf(stderr, "Failed to get queue family count\n");
+        return APP_ERROR_VULKAN_ENUM_QUEUE_FAMILY_PROP;
+    }
+
+    // VLA is ok here for simplicity.
+    VkQueueFamilyProperties queueFamiliesArr[queueFamilyCount];
+    vkGetPhysicalDeviceQueueFamilyProperties(app->physicalDevice, &queueFamilyCount, queueFamiliesArr);
+
+    if (verbose)
+    {
+        printf("=========================================\n");
+        printf("Queue families:\n");
+        for (uint32_t i = 0; i < queueFamilyCount; ++i)
+        {
+            printf("\tQueue family %i:\n", i);
+            printf("\t\tQueue flags: %u\n", queueFamiliesArr[i].queueFlags);
+            printf("\t\tQueue count: %u\n", queueFamiliesArr[i].queueCount);
+            printf("\t\tTimestamp valid bits: %u\n", queueFamiliesArr[i].timestampValidBits);
+            printf("\t\tMin image transfer granularity: %u, %u, %u\n", queueFamiliesArr[i].minImageTransferGranularity.width, queueFamiliesArr[i].minImageTransferGranularity.height, queueFamiliesArr[i].minImageTransferGranularity.depth);
+        }
+    }
+
+    // For the moment we are only interested in queue families that support graphics
+    // or presentation so we will loop through the queue families and select the first
+    // one that supports graphics and same for presentation queue family
+    bool graphicsQueueFamilyFound = false;
+    bool presentationQueueFamilyFound = false;
+    for (uint32_t i = 0; i < queueFamilyCount; ++i)
+    {
+        if (!graphicsQueueFamilyFound && queueFamiliesArr[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+        {
+            app->graphicsQueueFamilyIndex = i;
+            graphicsQueueFamilyFound = true;
+        }
+
+        VkBool32 presentationSupported = VK_FALSE;
+        VkResult result = vkGetPhysicalDeviceSurfaceSupportKHR(app->physicalDevice, i, app->surface, &presentationSupported);
+        if (result != VK_SUCCESS)
+        {
+            fprintf(stderr, "Failed to check presentation support: %d\n", result);
+            return APP_ERROR_VULKAN_CANNOT_GET_PRESENTATION_SUPPORT;
+        }
+
+        if (!presentationQueueFamilyFound && presentationSupported)
+        {
+            app->presentationQueueFamilyIndex = i;
+            presentationQueueFamilyFound = true;
+        }
+
+        if (graphicsQueueFamilyFound && presentationQueueFamilyFound)
+        {
+            break;
+        }
+    }
+
+    if (!graphicsQueueFamilyFound)
+    {
+        fprintf(stderr, "No graphics queue family found\n");
+        return APP_ERROR_VULKAN_NO_GRAPHICS_QUEUE_FAMILY;
+    }
+
+    if (!presentationQueueFamilyFound)
+    {
+        fprintf(stderr, "No presentation queue family found\n");
+        return APP_ERROR_VULKAN_NO_PRESENTATION_QUEUE_FAMILY;
+    }
+
+    // Set the app queue priorities to 1.0f
+    app->graphicsQueuePriority = 1.0f;
+    app->presentationQueuePriority = 1.0f;
+
+    // Now we can build the VkDeviceQueueCreateInfo but first we need to check if the queue
+    // family indices are different
+    if (app->graphicsQueueFamilyIndex == app->presentationQueueFamilyIndex)
+    {
+        // In this case we only need to create one queue info
+        app->queueCreateInfoCount = 1;
+        VkDeviceQueueCreateInfo queueCreateInfo = {0};
+        queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueCreateInfo.pNext = NULL;
+        queueCreateInfo.queueFamilyIndex = app->graphicsQueueFamilyIndex;
+        queueCreateInfo.queueCount = 1;
+        queueCreateInfo.pQueuePriorities = &app->graphicsQueuePriority;
+        app->pQueueCreateInfos[0] = queueCreateInfo;
+    }
+    else
+    {
+        // In this case we need to create two queue infos
+        app->queueCreateInfoCount = 2;
+        VkDeviceQueueCreateInfo graphicsQueueCreateInfo = {0};
+        graphicsQueueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        graphicsQueueCreateInfo.pNext = NULL;
+        graphicsQueueCreateInfo.queueFamilyIndex = app->graphicsQueueFamilyIndex;
+        graphicsQueueCreateInfo.queueCount = 1;
+        graphicsQueueCreateInfo.pQueuePriorities = &app->graphicsQueuePriority;
+
+        VkDeviceQueueCreateInfo presentationQueueCreateInfo = {0};
+        presentationQueueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        presentationQueueCreateInfo.pNext = NULL;
+        presentationQueueCreateInfo.queueFamilyIndex = app->presentationQueueFamilyIndex;
+        presentationQueueCreateInfo.queueCount = 1;
+        presentationQueueCreateInfo.pQueuePriorities = &app->presentationQueuePriority;
+
+        app->pQueueCreateInfos[0] = graphicsQueueCreateInfo;
+        app->pQueueCreateInfos[1] = presentationQueueCreateInfo;
+    }
+
+    return APP_SUCCESS;
+} // getDeviceQueues
 
 AppResult selectPhysicalDevice(App *app)
 {
@@ -189,6 +389,7 @@ AppResult selectPhysicalDevice(App *app)
     if (verbose)
     {
         printf("=========================================\n");
+        printf("Physical devices:\n");
     }
 
     // Now we need to select the best physical device
@@ -201,7 +402,7 @@ AppResult selectPhysicalDevice(App *app)
 
             VkPhysicalDeviceProperties deviceProperties;
             vkGetPhysicalDeviceProperties(deviceArr[i], &deviceProperties);
-            printf("\tDevice %i.:%s\n", i + 1, deviceProperties.deviceName);
+            printf("\tDevice %i: %s\n", i + 1, deviceProperties.deviceName);
             printf("\t\tAPI version: %u\n", deviceProperties.apiVersion);
             printf("\t\tDriver version: %u\n", deviceProperties.driverVersion);
             printf("\t\tVendor ID: %u\n", deviceProperties.vendorID);
@@ -292,6 +493,14 @@ uint32_t computeDeviceScore(VkPhysicalDevice device)
 
 bool isDeviceSuitable(VkPhysicalDevice device, VkSurfaceKHR surface)
 {
+    // With the snippet below we can filter out some devices to test other PhysicalDevice
+    // VkPhysicalDeviceProperties deviceProperties;
+    // vkGetPhysicalDeviceProperties(device, &deviceProperties);
+    // if (strcmp(deviceProperties.deviceName, "NVIDIA GeForce RTX 4090") == 0)
+    // {
+    //     return false;
+    // }
+
     // We need to check if the device has a graphics and presentation queue family
     bool hasGraphicsQueueFamily = deviceHasGraphicsQueueFamily(device);
     bool hasPresentationQueueFamily = deviceHasPresentationQueueFamily(device, surface);
