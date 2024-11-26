@@ -80,6 +80,9 @@ typedef struct App
     VkSurfaceCapabilitiesKHR selectedDeviceSurfaceCapabilities;
     VkExtent2D swapChainExtent;
     VkSwapchainKHR swapChain;
+    VkImage *swapChainImages;
+    uint32_t swapChainImageCount;
+    VkImageView *swapChainImageViews;
 } App;
 
 typedef enum AppResult
@@ -104,6 +107,9 @@ typedef enum AppResult
     APP_ERROR_VULKAN_GET_PHYS_DEV_PRESENT_MODES = 17,
     APP_ERROR_VULKAN_GET_PHYS_DEV_SURFACE_CAPABILITIES = 18,
     APP_ERROR_VULKAN_CREATE_SWAP_CHAIN = 19,
+    APP_ERROR_VULKAN_GET_SWAP_CHAIN_IMAGES = 20,
+    APP_ERROR_VULKAN_ALLOC_SWAP_CHAIN_IMAGE_VIEWS = 21,
+    APP_ERROR_VULKAN_CREATE_IMAGE_VIEW = 22,
 } AppResult;
 
 AppResult initGLFW(App *app);
@@ -122,6 +128,7 @@ AppResult createLogicalDevice(App *app);
 AppResult getDeviceQueues(App *app);
 AppResult createSwapChain(App *app);
 AppResult setOptimalSwapChainParameters(App *app);
+AppResult createImageViews(App *app);
 AppResult cleanup(App *app, AppResult result);
 
 int main(void)
@@ -223,6 +230,19 @@ AppResult initVulkan(App *app)
         printf("#########################################\n");
     }
 
+    // The next step is to setup the image views
+    appResult = createImageViews(app);
+    if (appResult != APP_SUCCESS)
+        return appResult;
+
+    if (verbose)
+    {
+        printf("=========================================\n");
+        printf("#########################################\n");
+        printf("#        IMAGE VIEWS CREATED            #\n");
+        printf("#########################################\n");
+    }
+
     // // Print the app Struct
     // if (verbose)
     // {
@@ -243,6 +263,45 @@ AppResult initVulkan(App *app)
 
     return APP_SUCCESS;
 } // initVulkan
+
+AppResult createImageViews(App *app)
+{
+    // First we need to create the image views
+    // Destroyed in the cleanup function
+    app->swapChainImageViews = malloc(app->swapChainImageCount * sizeof(VkImageView));
+    if (app->swapChainImageViews == NULL)
+    {
+        fprintf(stderr, "Failed to allocate memory for swap chain image views\n");
+        return APP_ERROR_VULKAN_ALLOC_SWAP_CHAIN_IMAGE_VIEWS;
+    }
+
+    for (uint32_t i = 0; i < app->swapChainImageCount; ++i)
+    {
+        VkImageViewCreateInfo imageViewCreateInfo = {0};
+        imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        imageViewCreateInfo.image = app->swapChainImages[i];
+        imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        imageViewCreateInfo.format = app->selectedDeviceSurfaceFormat.format;
+        imageViewCreateInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        imageViewCreateInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        imageViewCreateInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        imageViewCreateInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+        imageViewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
+        imageViewCreateInfo.subresourceRange.levelCount = 1;
+        imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
+        imageViewCreateInfo.subresourceRange.layerCount = 1;
+
+        VkResult vkResult = vkCreateImageView(app->logicalDevice, &imageViewCreateInfo, NULL, &app->swapChainImageViews[i]);
+        if (vkResult != VK_SUCCESS)
+        {
+            fprintf(stderr, "Failed to create image view: %d\n", vkResult);
+            return APP_ERROR_VULKAN_CREATE_IMAGE_VIEW;
+        }
+    }
+
+    return APP_SUCCESS;
+}
 
 AppResult createSwapChain(App *app)
 {
@@ -306,6 +365,23 @@ AppResult createSwapChain(App *app)
     {
         fprintf(stderr, "Failed to create swap chain: %d\n", vkResult);
         return APP_ERROR_VULKAN_CREATE_SWAP_CHAIN;
+    }
+
+    // Now we can get the swap chain images
+    vkResult = vkGetSwapchainImagesKHR(app->logicalDevice, app->swapChain, &app->swapChainImageCount, NULL);
+    if (vkResult != VK_SUCCESS || app->swapChainImageCount == 0)
+    {
+        fprintf(stderr, "Failed to get swap chain images: %d\n", vkResult);
+        return APP_ERROR_VULKAN_GET_SWAP_CHAIN_IMAGES;
+    }
+
+    // Images are destroyed when the swap chain is destroyed
+    app->swapChainImages = malloc(app->swapChainImageCount * sizeof(VkImage));
+    vkResult = vkGetSwapchainImagesKHR(app->logicalDevice, app->swapChain, &app->swapChainImageCount, app->swapChainImages);
+    if (vkResult != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to get swap chain images: %d\n", vkResult);
+        return APP_ERROR_VULKAN_GET_SWAP_CHAIN_IMAGES;
     }
 
     return APP_SUCCESS;
@@ -1184,6 +1260,15 @@ AppResult initGLFW(App *app)
 
 AppResult cleanup(App *app, AppResult result)
 {
+    if (app->swapChainImageViews != NULL)
+    {
+        for (uint32_t i = 0; i < app->swapChainImageCount; ++i)
+        {
+            vkDestroyImageView(app->logicalDevice, app->swapChainImageViews[i], NULL);
+        }
+        free(app->swapChainImageViews);
+    }
+
     if (app->swapChain != VK_NULL_HANDLE)
         vkDestroySwapchainKHR(app->logicalDevice, app->swapChain, NULL);
 
