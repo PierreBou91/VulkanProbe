@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <math.h>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -74,6 +75,11 @@ typedef struct App
     VkDeviceQueueCreateInfo pQueueCreateInfos[2];
     uint32_t queueCreateInfoCount;
     VkDevice logicalDevice;
+    VkSurfaceFormatKHR selectedDeviceSurfaceFormat;
+    VkPresentModeKHR selectedDevicePresentMode;
+    VkSurfaceCapabilitiesKHR selectedDeviceSurfaceCapabilities;
+    VkExtent2D swapChainExtent;
+    VkSwapchainKHR swapChain;
 } App;
 
 typedef enum AppResult
@@ -94,6 +100,10 @@ typedef enum AppResult
     APP_ERROR_VULKAN_NO_GRAPHICS_QUEUE_FAMILY = 13,
     APP_ERROR_VULKAN_NO_PRESENTATION_QUEUE_FAMILY = 14,
     APP_ERROR_VULKAN_CREATE_LOGICAL_DEVICE = 15,
+    APP_ERROR_VULKAN_GET_PHYS_DEV_SURFACE_FORMATS = 16,
+    APP_ERROR_VULKAN_GET_PHYS_DEV_PRESENT_MODES = 17,
+    APP_ERROR_VULKAN_GET_PHYS_DEV_SURFACE_CAPABILITIES = 18,
+    APP_ERROR_VULKAN_CREATE_SWAP_CHAIN = 19,
 } AppResult;
 
 AppResult initGLFW(App *app);
@@ -103,12 +113,15 @@ AppResult createSurface(App *app);
 AppResult createVulkanInstance(App *app);
 AppResult selectPhysicalDevice(App *app);
 bool isDeviceSuitable(VkPhysicalDevice device, VkSurfaceKHR surface);
+bool deviceHasSwapChainSupport(VkPhysicalDevice device, VkSurfaceKHR surface);
 bool deviceHasRequiredExtensions(VkPhysicalDevice device);
 bool deviceHasPresentationQueueFamily(VkPhysicalDevice device, VkSurfaceKHR surface);
 bool deviceHasGraphicsQueueFamily(VkPhysicalDevice device);
 uint32_t computeDeviceScore(VkPhysicalDevice device);
 AppResult createLogicalDevice(App *app);
 AppResult getDeviceQueues(App *app);
+AppResult createSwapChain(App *app);
+AppResult setOptimalSwapChainParameters(App *app);
 AppResult cleanup(App *app, AppResult result);
 
 int main(void)
@@ -197,6 +210,19 @@ AppResult initVulkan(App *app)
         printf("#########################################\n");
     }
 
+    // Then we wand to choose the right swap chain settings
+    appResult = createSwapChain(app);
+    if (appResult != APP_SUCCESS)
+        return appResult;
+
+    if (verbose)
+    {
+        printf("=========================================\n");
+        printf("#########################################\n");
+        printf("#         SWAP CHAIN CREATED            #\n");
+        printf("#########################################\n");
+    }
+
     // // Print the app Struct
     // if (verbose)
     // {
@@ -217,6 +243,196 @@ AppResult initVulkan(App *app)
 
     return APP_SUCCESS;
 } // initVulkan
+
+AppResult createSwapChain(App *app)
+{
+    // First we need to set the optimal swap chain parameters
+    AppResult appResult = setOptimalSwapChainParameters(app);
+    if (appResult != APP_SUCCESS)
+        return appResult;
+
+    // Then we have to decide how many images we want in the swap chain, a good value
+    // is to have at least one more than the minimum while not exceeding the maximum
+    // 0 in maxImageCount means that there is no maximum
+    uint32_t imageCount = 0;
+    if (app->selectedDeviceSurfaceCapabilities.maxImageCount > 0)
+        imageCount = fmin(app->selectedDeviceSurfaceCapabilities.maxImageCount, app->selectedDeviceSurfaceCapabilities.minImageCount + 1);
+    else
+        imageCount = app->selectedDeviceSurfaceCapabilities.minImageCount + 1;
+
+    // Now we can create the swap chain create info struct
+    VkSwapchainCreateInfoKHR swapChainCreateInfo = {0};
+    swapChainCreateInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    swapChainCreateInfo.surface = app->surface;
+    swapChainCreateInfo.minImageCount = imageCount;
+    swapChainCreateInfo.imageFormat = app->selectedDeviceSurfaceFormat.format;
+    swapChainCreateInfo.imageColorSpace = app->selectedDeviceSurfaceFormat.colorSpace;
+    swapChainCreateInfo.imageExtent = app->swapChainExtent;
+    swapChainCreateInfo.imageArrayLayers = 1;
+    swapChainCreateInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+    /*
+    From the vulkan tutorial:
+    https://vulkan-tutorial.com/Drawing_a_triangle/Presentation/Swap_chain
+    "we need to specify how to handle swap chain images that will be used across multiple queue families. That will be the case in our application if the graphics queue family is different from the presentation queue. We'll be drawing on the images in the swap chain from the graphics queue and then submitting them on the presentation queue. There are two ways to handle images that are accessed from multiple queues:
+
+    - VK_SHARING_MODE_EXCLUSIVE: An image is owned by one queue family at a time and ownership must be explicitly transferred before using it in another queue family. This option offers the best performance.
+    - VK_SHARING_MODE_CONCURRENT: Images can be used across multiple queue families without explicit ownership transfers.
+
+    If the queue families differ, then we'll be using the concurrent mode in this tutorial to avoid having to do the ownership chapters, because these involve some concepts that are better explained at a later time. Concurrent mode requires you to specify in advance between which queue families ownership will be shared using the queueFamilyIndexCount and pQueueFamilyIndices parameters. If the graphics queue family and presentation queue family are the same, which will be the case on most hardware, then we should stick to exclusive mode, because concurrent mode requires you to specify at least two distinct queue families"
+    */
+    if (app->graphicsQueueFamilyIndex != app->presentationQueueFamilyIndex)
+    {
+        uint32_t queueFamilyIndices[] = {app->graphicsQueueFamilyIndex, app->presentationQueueFamilyIndex};
+        swapChainCreateInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+        swapChainCreateInfo.queueFamilyIndexCount = 2;
+        swapChainCreateInfo.pQueueFamilyIndices = queueFamilyIndices;
+    }
+    else
+    {
+        swapChainCreateInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        swapChainCreateInfo.queueFamilyIndexCount = 0;
+        swapChainCreateInfo.pQueueFamilyIndices = NULL;
+    }
+
+    swapChainCreateInfo.preTransform = app->selectedDeviceSurfaceCapabilities.currentTransform;
+    swapChainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    swapChainCreateInfo.presentMode = app->selectedDevicePresentMode;
+    swapChainCreateInfo.clipped = VK_TRUE;
+    swapChainCreateInfo.oldSwapchain = VK_NULL_HANDLE;
+
+    VkResult vkResult = vkCreateSwapchainKHR(app->logicalDevice, &swapChainCreateInfo, NULL, &app->swapChain);
+    if (vkResult != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to create swap chain: %d\n", vkResult);
+        return APP_ERROR_VULKAN_CREATE_SWAP_CHAIN;
+    }
+
+    return APP_SUCCESS;
+} // createSwapChain
+
+AppResult setOptimalSwapChainParameters(App *app)
+{
+    // First chose the ideal format
+    uint32_t surfaceFormatCount = 0;
+    VkResult vkResult = vkGetPhysicalDeviceSurfaceFormatsKHR(app->physicalDevice, app->surface, &surfaceFormatCount, NULL);
+    if (vkResult != VK_SUCCESS || surfaceFormatCount == 0)
+    {
+        fprintf(stderr, "Failed to get physical device surface formats: %d\n", vkResult);
+        return APP_ERROR_VULKAN_GET_PHYS_DEV_SURFACE_FORMATS;
+    }
+    // VLA is ok here for simplicity.
+    VkSurfaceFormatKHR surfaceFormatsArr[surfaceFormatCount];
+    vkResult = vkGetPhysicalDeviceSurfaceFormatsKHR(app->physicalDevice, app->surface, &surfaceFormatCount, surfaceFormatsArr);
+
+    // Ideally we want a SRGB color format and color space
+    bool foundIdealFormat = false;
+    for (uint32_t i = 0; i < surfaceFormatCount; ++i)
+    {
+        if (surfaceFormatsArr[i].format == VK_FORMAT_B8G8R8A8_SRGB && surfaceFormatsArr[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+        {
+            app->selectedDeviceSurfaceFormat = surfaceFormatsArr[i];
+            foundIdealFormat = true;
+            break;
+        }
+    }
+
+    if (!foundIdealFormat)
+    {
+        // If we didn't find the ideal format we just take the first one
+        app->selectedDeviceSurfaceFormat = surfaceFormatsArr[0];
+    }
+
+    if (verbose)
+    {
+        printf("=========================================\n");
+        if (foundIdealFormat)
+        {
+            printf("Ideal format found:\n");
+            printf("\tFormat: VK_FORMAT_B8G8R8A8_SRGB\n");
+            printf("\tColor space: VK_COLOR_SPACE_SRGB_NONLINEAR_KHR\n");
+        }
+        else
+        {
+            printf("Ideal format not found, taking the first one:\n");
+            printf("\tFormat: %u\n", surfaceFormatsArr[0].format);
+            printf("\tColor space: %u\n", surfaceFormatsArr[0].colorSpace);
+        }
+    }
+
+    // Then we want to chose the presentation mode
+    uint32_t presentModeCount = 0;
+    vkResult = vkGetPhysicalDeviceSurfacePresentModesKHR(app->physicalDevice, app->surface, &presentModeCount, NULL);
+    if (vkResult != VK_SUCCESS || presentModeCount == 0)
+    {
+        fprintf(stderr, "Failed to get physical device surface present modes: %d\n", vkResult);
+        return APP_ERROR_VULKAN_GET_PHYS_DEV_PRESENT_MODES;
+    }
+    // VLA is ok here for simplicity.
+    VkPresentModeKHR presentModesArr[presentModeCount];
+    vkResult = vkGetPhysicalDeviceSurfacePresentModesKHR(app->physicalDevice, app->surface, &presentModeCount, presentModesArr);
+
+    // Ideally we want a mailbox present mode
+    bool foundIdealPresentMode = false;
+    for (uint32_t i = 0; i < presentModeCount; ++i)
+    {
+        if (presentModesArr[i] == VK_PRESENT_MODE_MAILBOX_KHR)
+        {
+            foundIdealPresentMode = true;
+            app->selectedDevicePresentMode = presentModesArr[i];
+            break;
+        }
+    }
+
+    if (!foundIdealPresentMode)
+    {
+        // If we didn't find the ideal present mode we just take the FIFO one that is
+        // guaranteed to be available
+        app->selectedDevicePresentMode = VK_PRESENT_MODE_FIFO_KHR;
+    }
+
+    if (verbose)
+    {
+        printf("=========================================\n");
+        if (foundIdealPresentMode)
+        {
+            printf("Ideal present mode found:\n");
+            printf("\tVK_PRESENT_MODE_MAILBOX_KHR\n");
+        }
+        else
+        {
+            printf("Ideal present mode not found, taking VK_PRESENT_MODE_FIFO_KHR\n");
+        }
+    }
+
+    // Then we have to setup app surface capabilities
+    vkResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(app->physicalDevice, app->surface, &app->selectedDeviceSurfaceCapabilities);
+    if (vkResult != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to get physical device surface capabilities: %d\n", vkResult);
+        return APP_ERROR_VULKAN_GET_PHYS_DEV_SURFACE_CAPABILITIES;
+    }
+
+    // and set the swap chain extent
+    if (app->selectedDeviceSurfaceCapabilities.currentExtent.width != UINT32_MAX)
+    {
+        app->swapChainExtent = app->selectedDeviceSurfaceCapabilities.currentExtent;
+    }
+    else
+    {
+        int width, height;
+        glfwGetFramebufferSize(app->window, &width, &height);
+        VkExtent2D actualExtent = {
+            .width = (uint32_t)width,
+            .height = (uint32_t)height,
+        };
+        actualExtent.width = fmax(app->selectedDeviceSurfaceCapabilities.minImageExtent.width, fmin(app->selectedDeviceSurfaceCapabilities.maxImageExtent.width, actualExtent.width));
+        actualExtent.height = fmax(app->selectedDeviceSurfaceCapabilities.minImageExtent.height, fmin(app->selectedDeviceSurfaceCapabilities.maxImageExtent.height, actualExtent.height));
+        app->swapChainExtent = actualExtent;
+    }
+
+    return APP_SUCCESS;
+} // setOptimalSwapChainParameters
 
 AppResult createLogicalDevice(App *app)
 {
@@ -502,14 +718,108 @@ bool isDeviceSuitable(VkPhysicalDevice device, VkSurfaceKHR surface)
     // }
 
     // We need to check if the device has a graphics and presentation queue family
-    bool hasGraphicsQueueFamily = deviceHasGraphicsQueueFamily(device);
-    bool hasPresentationQueueFamily = deviceHasPresentationQueueFamily(device, surface);
+    if (!deviceHasGraphicsQueueFamily(device))
+        return false;
+    if (!deviceHasPresentationQueueFamily(device, surface))
+        return false;
 
-    // And if it supports the required extensions
-    bool hasRequiredExtensions = deviceHasRequiredExtensions(device);
+    // If it supports the required extensions
+    if (!deviceHasRequiredExtensions(device))
+        return false;
 
-    return hasGraphicsQueueFamily && hasPresentationQueueFamily && hasRequiredExtensions;
+    // And if its swap chain is valid, note that it's important to check this AFTER having
+    // ensured that the device has the Swapchain extension
+    if (!deviceHasSwapChainSupport(device, surface))
+        return false;
+
+    return true;
 } // isDeviceSuitable
+
+bool deviceHasSwapChainSupport(VkPhysicalDevice device, VkSurfaceKHR surface)
+{
+    // For now the only thing we need to do is to ensure is that the device has at least
+    // one supported surface format and present mode given the surface.
+
+    // First get the physical device surface capabilities
+    VkSurfaceCapabilitiesKHR surfaceCapabilities = {0};
+    VkResult vkResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &surfaceCapabilities);
+    if (vkResult != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to get physical device surface capabilities: %d\n", vkResult);
+        return false;
+    }
+
+    if (verbose)
+    {
+        printf("\t\tSurface capabilities:\n");
+        printf("\t\t\tMin image count: %u\n", surfaceCapabilities.minImageCount);
+        printf("\t\t\tMax image count: %u\n", surfaceCapabilities.maxImageCount);
+        printf("\t\t\tCurrent extent: %u, %u\n", surfaceCapabilities.currentExtent.width, surfaceCapabilities.currentExtent.height);
+        printf("\t\t\tMin image extent: %u, %u\n", surfaceCapabilities.minImageExtent.width, surfaceCapabilities.minImageExtent.height);
+        printf("\t\t\tMax image extent: %u, %u\n", surfaceCapabilities.maxImageExtent.width, surfaceCapabilities.maxImageExtent.height);
+        printf("\t\t\tMax image array layers: %u\n", surfaceCapabilities.maxImageArrayLayers);
+        printf("\t\t\tSupported transforms: %x\n", surfaceCapabilities.supportedTransforms);
+        printf("\t\t\tCurrent transform: %x\n", surfaceCapabilities.currentTransform);
+        printf("\t\t\tSupported composite alpha: %x\n", surfaceCapabilities.supportedCompositeAlpha);
+        printf("\t\t\tSupported usage flags: %x\n", surfaceCapabilities.supportedUsageFlags);
+    }
+
+    // Then get the physical device surface formats
+    uint32_t surfaceFormatCount = 0;
+    vkResult = vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &surfaceFormatCount, NULL);
+    if (vkResult != VK_SUCCESS || surfaceFormatCount == 0)
+    {
+        fprintf(stderr, "Failed to get physical device surface formats: %d\n", vkResult);
+        return false;
+    }
+    // VLA is ok here for simplicity.
+    VkSurfaceFormatKHR surfaceFormatsArr[surfaceFormatCount];
+    vkResult = vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &surfaceFormatCount, surfaceFormatsArr);
+    if (vkResult != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to get physical device surface formats: %d\n", vkResult);
+        return false;
+    }
+
+    if (verbose)
+    {
+        printf("\t\tSurface formats:\n");
+        for (uint32_t i = 0; i < surfaceFormatCount; ++i)
+        {
+            printf("\t\t\tSurface format %i:\n", i);
+            printf("\t\t\t\tFormat: %u\n", surfaceFormatsArr[i].format);
+            printf("\t\t\t\tColor space: %u\n", surfaceFormatsArr[i].colorSpace);
+        }
+    }
+
+    // Then get the physical device surface present modes
+    uint32_t presentModeCount = 0;
+    vkResult = vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, NULL);
+    if (vkResult != VK_SUCCESS || presentModeCount == 0)
+    {
+        fprintf(stderr, "Failed to get physical device surface present modes: %d\n", vkResult);
+        return false;
+    }
+    // VLA is ok here for simplicity.
+    VkPresentModeKHR presentModesArr[presentModeCount];
+    vkResult = vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, presentModesArr);
+    if (vkResult != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to get physical device surface present modes: %d\n", vkResult);
+        return false;
+    }
+
+    if (verbose)
+    {
+        printf("\t\tPresent modes:\n");
+        for (uint32_t i = 0; i < presentModeCount; ++i)
+        {
+            printf("\t\t\tPresent mode %i: %u\n", i, presentModesArr[i]);
+        }
+    }
+
+    return true;
+} // deviceHasSwapChainSupport
 
 bool deviceHasRequiredExtensions(VkPhysicalDevice device)
 {
@@ -541,7 +851,7 @@ bool deviceHasRequiredExtensions(VkPhysicalDevice device)
     //     }
     // }
 
-    for (uint32_t i = 0; i < sizeof(requiredDeviceExtensions) / sizeof(requiredDeviceExtensions[0]); ++i)
+    for (uint32_t i = 0; i < ARRAY_LEN(requiredDeviceExtensions); ++i)
     {
         bool extensionFound = false;
         for (uint32_t j = 0; j < availableExtensionCount; ++j)
@@ -664,7 +974,7 @@ AppResult createVulkanInstance(App *app)
         }
         else
         {
-            for (uint32_t i = 0; i < sizeof(requiredInstanceExtensions) / sizeof(requiredInstanceExtensions[0]); ++i)
+            for (uint32_t i = 0; i < ARRAY_LEN(requiredInstanceExtensions); ++i)
             {
                 printf("\t\t%i. %s\n", i + 1, requiredInstanceExtensions[i]);
             }
@@ -680,7 +990,7 @@ AppResult createVulkanInstance(App *app)
     }
     else
     {
-        requiredInstanceExtensionsCount = glfwRequiredExtensionCount + sizeof(requiredInstanceExtensions) / sizeof(requiredInstanceExtensions[0]);
+        requiredInstanceExtensionsCount = glfwRequiredExtensionCount + ARRAY_LEN(requiredInstanceExtensions);
     }
 
     // VLA is ok here for simplicity.
@@ -692,7 +1002,7 @@ AppResult createVulkanInstance(App *app)
     }
     if (concatenatedRequiredInstanceExtensions[0] != NULL)
     {
-        for (uint32_t i = 0; i < sizeof(concatenatedRequiredInstanceExtensions) / sizeof(requiredInstanceExtensions[0]); ++i)
+        for (uint32_t i = 0; i < ARRAY_LEN(requiredInstanceExtensions); ++i)
         {
             concatenatedRequiredInstanceExtensions[glfwRequiredExtensionCount + i] = requiredInstanceExtensions[i];
         }
@@ -778,7 +1088,7 @@ AppResult createVulkanInstance(App *app)
         AppResult appResult = checkValidationLayerSupport();
         if (appResult != APP_SUCCESS)
             return appResult;
-        createInfo.enabledLayerCount = sizeof(validationLayers) / sizeof(validationLayers[0]);
+        createInfo.enabledLayerCount = ARRAY_LEN(validationLayers);
         createInfo.ppEnabledLayerNames = validationLayers;
     }
 
@@ -823,13 +1133,13 @@ AppResult checkValidationLayerSupport(void)
         }
         printf("=========================================\n");
         printf("Required validation layer(s) from the user:\n");
-        for (uint32_t i = 0; i < sizeof(validationLayers) / sizeof(validationLayers[0]); ++i)
+        for (uint32_t i = 0; i < ARRAY_LEN(validationLayers); ++i)
         {
             printf("\t%i. %s\n", i + 1, validationLayers[i]);
         }
     }
 
-    for (uint32_t i = 0; i < sizeof(validationLayers) / sizeof(validationLayers[0]); ++i)
+    for (uint32_t i = 0; i < ARRAY_LEN(validationLayers); ++i)
     {
         bool layerFound = false;
         for (uint32_t j = 0; j < layerCount; ++j)
@@ -874,6 +1184,9 @@ AppResult initGLFW(App *app)
 
 AppResult cleanup(App *app, AppResult result)
 {
+    if (app->swapChain != VK_NULL_HANDLE)
+        vkDestroySwapchainKHR(app->logicalDevice, app->swapChain, NULL);
+
     if (app->logicalDevice != VK_NULL_HANDLE)
         vkDestroyDevice(app->logicalDevice, NULL);
 
