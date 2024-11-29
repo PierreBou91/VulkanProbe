@@ -21,7 +21,7 @@ shaders: shaders/frag.spv shaders/vert.spv
 run: shaders VulkanProbe
 	./$(BUILD_DIR)VulkanProbe
 
-mac: VulkanProbe
+mac: shaders VulkanProbe
 	install_name_tool -add_rpath /usr/local/lib/ ./build/VulkanProbe
 	./$(BUILD_DIR)VulkanProbe
 
