@@ -83,6 +83,7 @@ typedef struct App
     VkImage *swapChainImages;
     uint32_t swapChainImageCount;
     VkImageView *swapChainImageViews;
+    VkPipelineLayout pipelineLayout;
 } App;
 
 typedef enum AppResult
@@ -110,6 +111,11 @@ typedef enum AppResult
     APP_ERROR_VULKAN_GET_SWAP_CHAIN_IMAGES = 20,
     APP_ERROR_VULKAN_ALLOC_SWAP_CHAIN_IMAGE_VIEWS = 21,
     APP_ERROR_VULKAN_CREATE_IMAGE_VIEW = 22,
+    APP_ERROR_FAILED_TO_OPEN_FILE = 23,
+    APP_ERROR_ALLOC_SHADER_BUFFER = 24,
+    APP_ERROR_READ_SHADER_FILE = 25,
+    APP_ERROR_VULKAN_CREATE_SHADER_MODULE = 26,
+    APP_ERROR_VULKAN_CREATE_PIPELINE_LAYOUT = 27,
 } AppResult;
 
 AppResult initGLFW(App *app);
@@ -129,6 +135,9 @@ AppResult getDeviceQueues(App *app);
 AppResult createSwapChain(App *app);
 AppResult setOptimalSwapChainParameters(App *app);
 AppResult createImageViews(App *app);
+AppResult createGraphicsPipeline(App *app);
+AppResult loadShader(const char *filename, VkShaderModule *shaderModule, App *app);
+AppResult createGraphicsPipeline(App *app);
 AppResult cleanup(App *app, AppResult result);
 
 int main(void)
@@ -243,6 +252,11 @@ AppResult initVulkan(App *app)
         printf("#########################################\n");
     }
 
+    // And then it's time to create the graphics pipeline
+    appResult = createGraphicsPipeline(app);
+    if (appResult != APP_SUCCESS)
+        return appResult;
+
     // // Print the app Struct
     // if (verbose)
     // {
@@ -263,6 +277,195 @@ AppResult initVulkan(App *app)
 
     return APP_SUCCESS;
 } // initVulkan
+
+AppResult createGraphicsPipeline(App *app)
+{
+    VkShaderModule vertexShaderModule = {0};
+    VkShaderModule fragmentShaderModule = {0};
+    AppResult appResult = loadShader("shaders/vert.spv", &vertexShaderModule, app);
+    if (appResult != APP_SUCCESS)
+        return appResult;
+
+    appResult = loadShader("shaders/frag.spv", &fragmentShaderModule, app);
+    if (appResult != APP_SUCCESS)
+        return appResult;
+
+    VkPipelineShaderStageCreateInfo vertexShaderStageCreateInfo = {0};
+    vertexShaderStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vertexShaderStageCreateInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vertexShaderStageCreateInfo.module = vertexShaderModule;
+    vertexShaderStageCreateInfo.pName = "main";
+
+    VkPipelineShaderStageCreateInfo fragmentShaderStageCreateInfo = {0};
+    fragmentShaderStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fragmentShaderStageCreateInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragmentShaderStageCreateInfo.module = fragmentShaderModule;
+    fragmentShaderStageCreateInfo.pName = "main";
+
+    VkPipelineShaderStageCreateInfo shaderStages[] = {vertexShaderStageCreateInfo, fragmentShaderStageCreateInfo};
+    // use shaderStages so the compiler shuts up
+    (void)shaderStages;
+
+    // Dynamic state of the Pipeline
+    VkDynamicState dynamicStates[2] = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR,
+    };
+
+    VkPipelineDynamicStateCreateInfo dynamicStateCreateInfo = {0};
+    dynamicStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicStateCreateInfo.dynamicStateCount = ARRAY_LEN(dynamicStates);
+    dynamicStateCreateInfo.pDynamicStates = dynamicStates;
+
+    // Vertex input
+    VkPipelineVertexInputStateCreateInfo vertexInputCreateInfo = {0};
+    vertexInputCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputCreateInfo.vertexBindingDescriptionCount = 0;
+    vertexInputCreateInfo.pVertexBindingDescriptions = NULL;
+    vertexInputCreateInfo.vertexAttributeDescriptionCount = 0;
+    vertexInputCreateInfo.pVertexAttributeDescriptions = NULL;
+
+    // Input assembly
+    VkPipelineInputAssemblyStateCreateInfo inputAssemblyCreateInfo = {0};
+    inputAssemblyCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssemblyCreateInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    inputAssemblyCreateInfo.primitiveRestartEnable = VK_FALSE;
+
+    // Viewport and scissor
+    VkViewport viewport = {0};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = (float)app->swapChainExtent.width;
+    viewport.height = (float)app->swapChainExtent.height;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    // we want to draw the entire frame buffer
+    VkRect2D scissor = {0};
+    scissor.offset = (VkOffset2D){0, 0};
+    scissor.extent = app->swapChainExtent;
+
+    VkPipelineViewportStateCreateInfo viewportStateCreateInfo = {0};
+    viewportStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportStateCreateInfo.viewportCount = 1;
+    viewportStateCreateInfo.pViewports = &viewport;
+    viewportStateCreateInfo.scissorCount = 1;
+    viewportStateCreateInfo.pScissors = &scissor;
+
+    // Rasterizer
+    VkPipelineRasterizationStateCreateInfo rasterizationCreateInfo = {0};
+    rasterizationCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizationCreateInfo.depthClampEnable = VK_FALSE;
+    rasterizationCreateInfo.rasterizerDiscardEnable = VK_FALSE;
+    rasterizationCreateInfo.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizationCreateInfo.lineWidth = 1.0f;
+    rasterizationCreateInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizationCreateInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterizationCreateInfo.depthBiasEnable = VK_FALSE;
+    rasterizationCreateInfo.depthBiasConstantFactor = 0.0f;
+    rasterizationCreateInfo.depthBiasClamp = 0.0f;
+    rasterizationCreateInfo.depthBiasSlopeFactor = 0.0f;
+
+    // Multisampling
+    VkPipelineMultisampleStateCreateInfo multisampleCreateInfo = {0};
+    multisampleCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampleCreateInfo.sampleShadingEnable = VK_FALSE;
+    multisampleCreateInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampleCreateInfo.minSampleShading = 1.0f;
+    multisampleCreateInfo.pSampleMask = NULL;
+    multisampleCreateInfo.alphaToCoverageEnable = VK_FALSE;
+    multisampleCreateInfo.alphaToOneEnable = VK_FALSE;
+
+    // For now we don´t need depth and stencil testing
+
+    // Color blending
+    VkPipelineColorBlendAttachmentState colorBlendAttachment = {0};
+    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttachment.blendEnable = VK_FALSE;
+    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+    colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    VkPipelineColorBlendStateCreateInfo colorBlendCreateInfo = {0};
+    colorBlendCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlendCreateInfo.logicOpEnable = VK_FALSE;
+    colorBlendCreateInfo.logicOp = VK_LOGIC_OP_COPY;
+    colorBlendCreateInfo.attachmentCount = 1;
+    colorBlendCreateInfo.pAttachments = &colorBlendAttachment;
+    colorBlendCreateInfo.blendConstants[0] = 0.0f;
+    colorBlendCreateInfo.blendConstants[1] = 0.0f;
+    colorBlendCreateInfo.blendConstants[2] = 0.0f;
+    colorBlendCreateInfo.blendConstants[3] = 0.0f;
+
+    // Pipeline layout
+    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = {0};
+    pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutCreateInfo.setLayoutCount = 0;
+    pipelineLayoutCreateInfo.pSetLayouts = NULL;
+    pipelineLayoutCreateInfo.pushConstantRangeCount = 0;
+    pipelineLayoutCreateInfo.pPushConstantRanges = NULL;
+
+    VkResult vkResult = vkCreatePipelineLayout(app->logicalDevice, &pipelineLayoutCreateInfo, NULL, &app->pipelineLayout);
+    if (vkResult != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to create pipeline layout: %d\n", vkResult);
+        return APP_ERROR_VULKAN_CREATE_PIPELINE_LAYOUT;
+    }
+
+    vkDestroyShaderModule(app->logicalDevice, vertexShaderModule, NULL);
+    vkDestroyShaderModule(app->logicalDevice, fragmentShaderModule, NULL);
+
+    return APP_SUCCESS;
+} // createGraphicsPipeline
+
+AppResult loadShader(const char *filename, VkShaderModule *shaderModule, App *app)
+{
+    FILE *file = fopen(filename, "rb");
+    if (file == NULL)
+    {
+        fprintf(stderr, "Failed to open file: %s\n", filename);
+        return APP_ERROR_FAILED_TO_OPEN_FILE;
+    }
+
+    fseek(file, 0, SEEK_END);
+    size_t fileSize = ftell(file);
+    rewind(file);
+
+    char *buffer = malloc(fileSize);
+    if (buffer == NULL)
+    {
+        fprintf(stderr, "Failed to allocate memory for shader: %s\n", filename);
+        return APP_ERROR_ALLOC_SHADER_BUFFER;
+    }
+
+    size_t bytesRead = fread(buffer, 1, fileSize, file);
+    if (bytesRead != fileSize)
+    {
+        fprintf(stderr, "Failed to read file: %s\n", filename);
+        return APP_ERROR_READ_SHADER_FILE;
+    }
+
+    fclose(file);
+
+    VkShaderModuleCreateInfo shaderModuleCreateInfo = {0};
+    shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    shaderModuleCreateInfo.codeSize = fileSize;
+    shaderModuleCreateInfo.pCode = (uint32_t *)buffer;
+
+    VkResult vkResult = vkCreateShaderModule(app->logicalDevice, &shaderModuleCreateInfo, NULL, shaderModule);
+    if (vkResult != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to create shader module: %d\n", vkResult);
+        return APP_ERROR_VULKAN_CREATE_SHADER_MODULE;
+    }
+
+    free(buffer);
+
+    return APP_SUCCESS;
+} // loadShader
 
 AppResult createImageViews(App *app)
 {
@@ -1260,6 +1463,9 @@ AppResult initGLFW(App *app)
 
 AppResult cleanup(App *app, AppResult result)
 {
+    if (app->pipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(app->logicalDevice, app->pipelineLayout, NULL);
+
     if (app->swapChainImageViews != NULL)
     {
         for (uint32_t i = 0; i < app->swapChainImageCount; ++i)

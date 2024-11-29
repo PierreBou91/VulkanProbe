@@ -8,9 +8,17 @@ VulkanProbe: main.c
 	mkdir -p $(BUILD_DIR)
 	clang $(CFLAGS) -o $(BUILD_DIR)VulkanProbe main.c $(LDFLAGS)
 
+shaders/frag.spv: shaders/frag.frag
+	glslc shaders/frag.frag -o shaders/frag.spv
+
+shaders/vert.spv: shaders/vert.vert
+	glslc shaders/vert.vert -o shaders/vert.spv
+
+shaders: shaders/frag.spv shaders/vert.spv
+
 .PHONY: test clean mac
 
-run: VulkanProbe
+run: shaders VulkanProbe
 	./$(BUILD_DIR)VulkanProbe
 
 mac: VulkanProbe
