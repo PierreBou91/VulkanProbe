@@ -86,6 +86,7 @@ typedef struct App
     VkRenderPass renderPass;
     VkPipelineLayout pipelineLayout;
     VkPipeline graphicsPipeline;
+    VkFramebuffer *swapChainFramebuffers;
 } App;
 
 typedef enum AppResult
@@ -120,6 +121,8 @@ typedef enum AppResult
     APP_ERROR_VULKAN_CREATE_PIPELINE_LAYOUT = 27,
     APP_ERROR_VULKAN_CREATE_RENDER_PASS = 28,
     APP_ERROR_VULKAN_CREATE_GRAPHICS_PIPELINE = 29,
+    APP_ERROR_VULKAN_ALLOC_SWAP_CHAIN_FRAMEBUFFERS = 30,
+    APP_ERROR_VULKAN_CREATE_FRAMEBUFFER = 31,
 } AppResult;
 
 AppResult initGLFW(App *app);
@@ -143,6 +146,7 @@ AppResult createGraphicsPipeline(App *app);
 AppResult loadShader(const char *filename, VkShaderModule *shaderModule, App *app);
 AppResult createRenderPass(App *app);
 AppResult createGraphicsPipeline(App *app);
+AppResult createFramebuffers(App *app);
 AppResult cleanup(App *app, AppResult result);
 
 int main(void)
@@ -279,7 +283,20 @@ AppResult initVulkan(App *app)
     {
         printf("=========================================\n");
         printf("#########################################\n");
-        printf("#       GRAPHICS PIPELINE CREATED       #\n");
+        printf("#       GRAPHICS PIPELINE CREATED        #\n");
+        printf("#########################################\n");
+    }
+
+    // Now we can create the framebuffers
+    appResult = createFramebuffers(app);
+    if (appResult != APP_SUCCESS)
+        return appResult;
+
+    if (verbose)
+    {
+        printf("=========================================\n");
+        printf("#########################################\n");
+        printf("#        FRAMEBUFFERS CREATED           #\n");
         printf("#########################################\n");
     }
 
@@ -303,6 +320,42 @@ AppResult initVulkan(App *app)
 
     return APP_SUCCESS;
 } // initVulkan
+
+AppResult createFramebuffers(App *app)
+{
+    // first we need to allocate memory for the framebuffers
+    app->swapChainFramebuffers = malloc(app->swapChainImageCount * sizeof(VkFramebuffer));
+    if (app->swapChainFramebuffers == NULL)
+    {
+        fprintf(stderr, "Failed to allocate memory for framebuffers\n");
+        return APP_ERROR_VULKAN_ALLOC_SWAP_CHAIN_FRAMEBUFFERS;
+    }
+
+    for (uint32_t i = 0; i < app->swapChainImageCount; ++i)
+    {
+        VkImageView attachments[] = {
+            app->swapChainImageViews[i],
+        };
+
+        VkFramebufferCreateInfo framebufferCreateInfo = {0};
+        framebufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferCreateInfo.renderPass = app->renderPass;
+        framebufferCreateInfo.attachmentCount = 1;
+        framebufferCreateInfo.pAttachments = attachments;
+        framebufferCreateInfo.width = app->swapChainExtent.width;
+        framebufferCreateInfo.height = app->swapChainExtent.height;
+        framebufferCreateInfo.layers = 1;
+
+        VkResult vkResult = vkCreateFramebuffer(app->logicalDevice, &framebufferCreateInfo, NULL, &app->swapChainFramebuffers[i]);
+        if (vkResult != VK_SUCCESS)
+        {
+            fprintf(stderr, "Failed to create framebuffer: %d\n", vkResult);
+            return APP_ERROR_VULKAN_CREATE_FRAMEBUFFER;
+        }
+    }
+
+    return APP_SUCCESS;
+}
 
 AppResult createGraphicsPipeline(App *app)
 {
@@ -1562,6 +1615,15 @@ AppResult cleanup(App *app, AppResult result)
 
     if (app->pipelineLayout != VK_NULL_HANDLE)
         vkDestroyPipelineLayout(app->logicalDevice, app->pipelineLayout, NULL);
+
+    if (app->swapChainFramebuffers != NULL)
+    {
+        for (uint32_t i = 0; i < app->swapChainImageCount; ++i)
+        {
+            vkDestroyFramebuffer(app->logicalDevice, app->swapChainFramebuffers[i], NULL);
+        }
+        free(app->swapChainFramebuffers);
+    }
 
     if (app->renderPass != VK_NULL_HANDLE)
         vkDestroyRenderPass(app->logicalDevice, app->renderPass, NULL);
