@@ -85,6 +85,7 @@ typedef struct App
     VkImageView *swapChainImageViews;
     VkRenderPass renderPass;
     VkPipelineLayout pipelineLayout;
+    VkPipeline graphicsPipeline;
 } App;
 
 typedef enum AppResult
@@ -118,6 +119,7 @@ typedef enum AppResult
     APP_ERROR_VULKAN_CREATE_SHADER_MODULE = 26,
     APP_ERROR_VULKAN_CREATE_PIPELINE_LAYOUT = 27,
     APP_ERROR_VULKAN_CREATE_RENDER_PASS = 28,
+    APP_ERROR_VULKAN_CREATE_GRAPHICS_PIPELINE = 29,
 } AppResult;
 
 AppResult initGLFW(App *app);
@@ -260,10 +262,26 @@ AppResult initVulkan(App *app)
     if (appResult != APP_SUCCESS)
         return appResult;
 
+    if (verbose)
+    {
+        printf("=========================================\n");
+        printf("#########################################\n");
+        printf("#         RENDER PASS CREATED           #\n");
+        printf("#########################################\n");
+    }
+
     // And then it's time to create the graphics pipeline
     appResult = createGraphicsPipeline(app);
     if (appResult != APP_SUCCESS)
         return appResult;
+
+    if (verbose)
+    {
+        printf("=========================================\n");
+        printf("#########################################\n");
+        printf("#       GRAPHICS PIPELINE CREATED       #\n");
+        printf("#########################################\n");
+    }
 
     // // Print the app Struct
     // if (verbose)
@@ -285,48 +303,6 @@ AppResult initVulkan(App *app)
 
     return APP_SUCCESS;
 } // initVulkan
-
-AppResult createRenderPass(App *app)
-{
-    // Firs we need to create the color attachment
-    VkAttachmentDescription colorAttachment = {0};
-    colorAttachment.format = app->selectedDeviceSurfaceFormat.format;
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-    // Then the attachment reference for the subpass
-    VkAttachmentReference colorAttachmentRef = {0};
-    colorAttachmentRef.attachment = 0;
-    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    // Now we can create the subpass
-    VkSubpassDescription subpass = {0};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorAttachmentRef;
-
-    // Finally we can create the render pass
-    VkRenderPassCreateInfo renderPassCreateInfo = {0};
-    renderPassCreateInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassCreateInfo.attachmentCount = 1;
-    renderPassCreateInfo.pAttachments = &colorAttachment;
-    renderPassCreateInfo.subpassCount = 1;
-    renderPassCreateInfo.pSubpasses = &subpass;
-
-    VkResult vkResult = vkCreateRenderPass(app->logicalDevice, &renderPassCreateInfo, NULL, &app->renderPass);
-    if (vkResult != VK_SUCCESS)
-    {
-        fprintf(stderr, "Failed to create render pass: %d\n", vkResult);
-        return APP_ERROR_VULKAN_CREATE_RENDER_PASS;
-    }
-
-    return APP_SUCCESS;
-}
 
 AppResult createGraphicsPipeline(App *app)
 {
@@ -465,11 +441,79 @@ AppResult createGraphicsPipeline(App *app)
         return APP_ERROR_VULKAN_CREATE_PIPELINE_LAYOUT;
     }
 
+    // Finally we can create the graphics pipeline
+    VkGraphicsPipelineCreateInfo pipelineCreateInfo = {0};
+    pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineCreateInfo.stageCount = ARRAY_LEN(shaderStages);
+    pipelineCreateInfo.pStages = shaderStages;
+    pipelineCreateInfo.pVertexInputState = &vertexInputCreateInfo;
+    pipelineCreateInfo.pInputAssemblyState = &inputAssemblyCreateInfo;
+    pipelineCreateInfo.pViewportState = &viewportStateCreateInfo;
+    pipelineCreateInfo.pRasterizationState = &rasterizationCreateInfo;
+    pipelineCreateInfo.pMultisampleState = &multisampleCreateInfo;
+    pipelineCreateInfo.pDepthStencilState = NULL;
+    pipelineCreateInfo.pColorBlendState = &colorBlendCreateInfo;
+    pipelineCreateInfo.pDynamicState = &dynamicStateCreateInfo;
+    pipelineCreateInfo.layout = app->pipelineLayout;
+    pipelineCreateInfo.renderPass = app->renderPass;
+    pipelineCreateInfo.subpass = 0;
+    pipelineCreateInfo.basePipelineHandle = VK_NULL_HANDLE;
+    pipelineCreateInfo.basePipelineIndex = -1;
+
+    vkResult = vkCreateGraphicsPipelines(app->logicalDevice, VK_NULL_HANDLE, 1, &pipelineCreateInfo, NULL, &app->graphicsPipeline);
+    if (vkResult != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to create graphics pipeline: %d\n", vkResult);
+        return APP_ERROR_VULKAN_CREATE_GRAPHICS_PIPELINE;
+    }
+
     vkDestroyShaderModule(app->logicalDevice, vertexShaderModule, NULL);
     vkDestroyShaderModule(app->logicalDevice, fragmentShaderModule, NULL);
 
     return APP_SUCCESS;
 } // createGraphicsPipeline
+
+AppResult createRenderPass(App *app)
+{
+    // Firs we need to create the color attachment
+    VkAttachmentDescription colorAttachment = {0};
+    colorAttachment.format = app->selectedDeviceSurfaceFormat.format;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    // Then the attachment reference for the subpass
+    VkAttachmentReference colorAttachmentRef = {0};
+    colorAttachmentRef.attachment = 0;
+    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    // Now we can create the subpass
+    VkSubpassDescription subpass = {0};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorAttachmentRef;
+
+    // Finally we can create the render pass
+    VkRenderPassCreateInfo renderPassCreateInfo = {0};
+    renderPassCreateInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassCreateInfo.attachmentCount = 1;
+    renderPassCreateInfo.pAttachments = &colorAttachment;
+    renderPassCreateInfo.subpassCount = 1;
+    renderPassCreateInfo.pSubpasses = &subpass;
+
+    VkResult vkResult = vkCreateRenderPass(app->logicalDevice, &renderPassCreateInfo, NULL, &app->renderPass);
+    if (vkResult != VK_SUCCESS)
+    {
+        fprintf(stderr, "Failed to create render pass: %d\n", vkResult);
+        return APP_ERROR_VULKAN_CREATE_RENDER_PASS;
+    }
+
+    return APP_SUCCESS;
+}
 
 AppResult loadShader(const char *filename, VkShaderModule *shaderModule, App *app)
 {
@@ -1513,6 +1557,9 @@ AppResult initGLFW(App *app)
 
 AppResult cleanup(App *app, AppResult result)
 {
+    if (app->graphicsPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(app->logicalDevice, app->graphicsPipeline, NULL);
+
     if (app->pipelineLayout != VK_NULL_HANDLE)
         vkDestroyPipelineLayout(app->logicalDevice, app->pipelineLayout, NULL);
 
